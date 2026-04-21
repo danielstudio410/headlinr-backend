@@ -1,222 +1,153 @@
-// ==============================
-// 1. Load environment variables
-// ==============================
+import fetch from "node-fetch";
 import dotenv from "dotenv";
+
 dotenv.config();
 
-// ==============================
-// 2. Imports
-// ==============================
-import fetch from "node-fetch";
-import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
-
-// ==============================
-// 3. Initialize clients
-// ==============================
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// ==============================
-// 4. Constants
-// ==============================
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-const CATEGORIES = [
-  "politics",
-  "business",
-  "tech",
-  "science",
-  "health",
-  "sports",
-  "entertainment",
-  "lifestyle",
-  "world",
-  "crime",
-  "murder",
-  "environment",
-];
+const storyCounts = {};
 
-// ==============================
-// 5. Helper: Clean AI JSON
-// ==============================
-function safeParseJSON(text) {
-  try {
-    // Remove code block formatting if AI adds it
-    const cleaned = text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
+function calculateTrendingScore({ publishedAt, duplicateCount, category }) {
+  const now = new Date();
+  const published = new Date(publishedAt);
 
-    return JSON.parse(cleaned);
-  } catch (err) {
-    console.error("JSON parse failed:", err.message);
-    return null;
-  }
+  const hoursOld = (now - published) / (1000 * 60 * 60);
+  const recencyScore = Math.max(0, 40 - hoursOld);
+
+  const duplicateScore = Math.min(30, duplicateCount * 5);
+
+  const categoryBoostMap = {
+    murder: 20,
+    crime: 15,
+    politics: 10,
+    world: 10,
+    tech: 5,
+    business: 5,
+    entertainment: 8,
+    sports: 6,
+    health: 5,
+    science: 5,
+    lifestyle: 3,
+    environment: 4
+  };
+
+  const categoryScore = categoryBoostMap[category] || 0;
+
+  const total = recencyScore + duplicateScore + categoryScore;
+  return Math.round(Math.min(100, total));
 }
 
-// ==============================
-// 6. Helper: Check duplicate URL
-// ==============================
-async function isDuplicate(url) {
-  const { data, error } = await supabase
-    .from("articles")
-    .select("id")
-    .eq("url", url)
-    .limit(1);
-
-  if (error) {
-    console.error("Duplicate check error:", error.message);
-    return false;
-  }
-
-  return data.length > 0;
-}
-
-// ==============================
-// 7. Main function
-// ==============================
 async function fetchNews() {
-  try {
-    console.log("🚀 Fetching news...");
+  console.log("🚀 Fetching news...");
 
-    const response = await fetch(
-      `https://newsapi.org/v2/top-headlines?language=en&pageSize=20&apiKey=${NEWS_API_KEY}`
-    );
+  const url = `https://newsapi.org/v2/top-headlines?language=en&pageSize=20&apiKey=${NEWS_API_KEY}`;
+  const res = await fetch(url);
+  const data = await res.json();
 
-    const data = await response.json();
+  for (const article of data.articles) {
+    if (!article.title || !article.url) continue;
 
-    if (!data.articles || data.articles.length === 0) {
-      console.error("❌ No articles returned.");
-      return;
+    const key = article.title.toLowerCase();
+
+    if (!storyCounts[key]) {
+      storyCounts[key] = 0;
+    }
+    storyCounts[key]++;
+
+    console.log(`📰 Processing: ${article.title}`);
+
+    // 🔍 Check if already exists
+    const checkRes = await fetch(`${SUPABASE_URL}/rest/v1/articles?url=eq.${encodeURIComponent(article.url)}`, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`
+      }
+    });
+
+    const existing = await checkRes.json();
+
+    if (existing.length > 0) {
+      console.log("⏭ Skipped (duplicate URL)");
+      continue;
     }
 
-    for (const article of data.articles) {
-      const { title, description, url } = article;
+    // 🧠 Call OpenAI ONLY for new articles
+    const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Return JSON with: logline, category, country"
+          },
+          {
+            role: "user",
+            content: `Title: ${article.title}\nDescription: ${article.description}`
+          }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
 
-      if (!title || !description || !url) continue;
+    const aiData = await aiRes.json();
 
-      console.log(`\n📰 Processing: ${title}`);
-
-      // ==============================
-      // 7a. Skip duplicates
-      // ==============================
-      const exists = await isDuplicate(url);
-      if (exists) {
-        console.log("⏭ Skipped (duplicate)");
-        continue;
-      }
-
-      // ==============================
-      // 7b. AI Processing
-      // ==============================
-      let logline = title;
-      let category = "world";
-      let country = "global";
-
-      try {
-        const aiResponse = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You analyze news articles and return structured JSON only.",
-            },
-            {
-              role: "user",
-              content: `
-Analyze this news article and return:
-
-1. A sharp, factual, cinematic news logline (max 20 words)
-2. A category from this list:
-${CATEGORIES.join(", ")}
-3. The most relevant country (e.g. US, UK, Australia)
-
-IMPORTANT RULES:
-- Use "murder" ONLY if the story involves a killing or homicide
-- Use "crime" for all other criminal activity
-- Be concise and factual (not clickbait)
-
-Return ONLY valid JSON:
-{
-  "logline": "...",
-  "category": "...",
-  "country": "..."
-}
-
-Title: ${title}
-Description: ${description}
-              `,
-            },
-          ],
-          max_tokens: 150,
-        });
-
-        const content = aiResponse.choices[0].message.content;
-
-        const parsed = safeParseJSON(content);
-
-        if (parsed) {
-          logline = parsed.logline || title;
-          category = CATEGORIES.includes(parsed.category)
-            ? parsed.category
-            : "world";
-          country = parsed.country || "global";
-        }
-
-        console.log("✨ Logline:", logline);
-        console.log("🏷 Category:", category);
-        console.log("🌍 Country:", country);
-
-      } catch (err) {
-        console.error("🤖 OpenAI error:", err.message);
-      }
-
-      // ==============================
-      // 7c. Metadata
-      // ==============================
-      const created_at = new Date();
-
-      // Simple trending score (MVP)
-      const trending_score = Math.floor(Math.random() * 100);
-
-      // ==============================
-      // 7d. Insert into Supabase
-      // ==============================
-      const { error } = await supabase.from("articles").insert([
-        {
-          title,
-          description,
-          url,
-          logline,
-          category,
-          country,
-          created_at,
-          trending_score,
-        },
-      ]);
-
-      if (error) {
-        console.error("❌ Insert failed:", error.message);
-      } else {
-        console.log("✅ Inserted successfully");
-      }
+    let parsed;
+    try {
+      parsed = JSON.parse(aiData.choices[0].message.content);
+    } catch (e) {
+      console.log("❌ AI parse failed");
+      continue;
     }
 
-    console.log("\n🎉 Done!");
-  } catch (err) {
-    console.error("🔥 Fatal error:", err.message);
+    const { logline, category, country } = parsed;
+
+    const trendingScore = calculateTrendingScore({
+      publishedAt: article.publishedAt,
+      duplicateCount: storyCounts[key],
+      category
+    });
+
+    console.log(`✨ Logline: ${logline}`);
+    console.log(`🏷 Category: ${category}`);
+    console.log(`🌍 Country: ${country}`);
+    console.log(`🔥 Trending Score: ${trendingScore}`);
+
+    const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal"
+      },
+      body: JSON.stringify({
+        title: article.title,
+        description: article.description,
+        url: article.url,
+        logline,
+        category,
+        country,
+        created_at: new Date().toISOString(),
+        trending_score: trendingScore
+      })
+    });
+
+    if (!insertRes.ok) {
+      console.log("❌ Insert failed");
+    } else {
+      console.log("✅ Inserted successfully");
+    }
   }
+
+  console.log("🎉 Done!");
 }
 
-// ==============================
-// 8. Run script
-// ==============================
 fetchNews();
