@@ -38,7 +38,7 @@ function similarity(a, b) {
   return overlap.length / Math.max(A.size, B.size);
 }
 
-// 🔥 Apply decay
+// 🔥 Decay
 function applyDecay(score, lastSeenAt) {
   const hours = (new Date() - new Date(lastSeenAt)) / (1000 * 60 * 60);
   return Math.max(0, Math.round(score - hours * 2));
@@ -79,7 +79,7 @@ function initialScore(category) {
   return map[category] || 10;
 }
 
-// 🤖 AI HEADLINE GENERATOR (UPGRADED PROMPT)
+// 🤖 AI HEADLINE GENERATOR (BALANCED TONE)
 async function generateHeadline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -96,22 +96,24 @@ async function generateHeadline(title, description) {
             content: `Write a concise, punchy news headline.
 
 Rules:
-- 8 to 14 words
-- Use strong, active verbs (avoid "is", "are", "was", "were")
-- Lead with the most important fact or action
-- Make it sharp and engaging, but still factual
-- Avoid passive or vague phrasing (e.g. "reports", "says", "witnesses say")
-- Avoid filler words like "amid", "as", "after" where possible
-- No exaggeration, hype, or clickbait
+- 8 to 12 words (strict)
+- Use strong, active verbs
+- Lead with the key event or outcome
+- Keep it tight and clean — no unnecessary clauses
+- Allow a touch of energy or drama, but keep it credible
+- Avoid exaggerated or tabloid language (e.g. "horror", "shocking", "devastating")
+- Avoid filler words like "amid", "as", "after", "following"
+- Avoid vague phrasing like "reports", "says", "witnesses"
+- No clickbait or misleading phrasing
 - No source names
-- Should feel modern, tight, and slightly bold — like a premium news app`
+- Should feel modern, sharp, and slightly bold — like a premium news app`
           },
           {
             role: "user",
             content: `Title: ${title}\nDescription: ${description}`
           }
         ],
-        temperature: 0.5
+        temperature: 0.6
       })
     });
 
@@ -167,7 +169,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY (CLUSTER UPDATE)
+    // 🔁 EXISTING STORY
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -181,11 +183,15 @@ async function fetchNews() {
         updatedSources.push(article.url);
       }
 
-      // 🤖 Generate improved headline
-      const newHeadline = await generateHeadline(
-        article.title,
-        article.description
-      );
+      // 🔒 Optional: lock headline after enough sources
+      let newHeadline = bestMatch.canonical_title;
+
+      if ((bestMatch.source_count || 1) < 3) {
+        newHeadline = await generateHeadline(
+          article.title,
+          article.description
+        );
+      }
 
       console.log(`🧠 AI Headline: ${newHeadline}`);
 
@@ -223,9 +229,7 @@ async function fetchNews() {
         messages: [
           {
             role: "system",
-            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(
-              ", "
-            )}), country`
+            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(", ")}), country`
           },
           {
             role: "user",
@@ -251,7 +255,6 @@ async function fetchNews() {
     category = normalizeCategory(category);
     const score = initialScore(category);
 
-    // 🤖 Generate canonical headline
     const headline = await generateHeadline(
       article.title,
       article.description
