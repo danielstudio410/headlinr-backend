@@ -9,7 +9,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
 
 // ================= CONFIG =================
-const SIMILARITY_THRESHOLD = 0.5;
+const SIMILARITY_THRESHOLD = 0.45;
 const TRENDING_BOOST = 5;
 const DECAY_RATE = 0.9;
 
@@ -26,6 +26,8 @@ function tokenize(text) {
 
 // --- Similarity ---
 function similarity(a, b) {
+  if (!a || !b) return 0;
+
   const tokensA = tokenize(a);
   const tokensB = tokenize(b);
 
@@ -37,12 +39,29 @@ function similarity(a, b) {
 
 // ================= AUTO-TIGHTEN =================
 function tighten(text) {
-  return text
-    .replace(/in a (dramatic|shocking|stunning) (turn|move|twist)/gi, "")
-    .replace(/amid.*?(,|$)/gi, "")
-    .replace(/highlighting|showcasing|underscoring/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let t = text;
+
+  const fluff = [
+    "in a dramatic turn",
+    "in a surprising twist",
+    "in a shocking development",
+    "in a stunning move",
+    "amid growing concerns",
+    "raising questions about",
+    "highlighting",
+    "showcasing",
+    "underscoring",
+  ];
+
+  fluff.forEach(p => {
+    t = t.replace(new RegExp(p, "gi"), "");
+  });
+
+  t = t.replace(/\s+/g, " ").trim();
+
+  if (!t.endsWith(".")) t += ".";
+
+  return t;
 }
 
 // ================= AI =================
@@ -50,16 +69,18 @@ function tighten(text) {
 // --- LOGLINE ---
 async function generateLogline(title, description) {
   const prompt = `
-Write a tight, grounded, cinematic news logline.
+Write a tight, cinematic news logline.
 
 RULES:
 - Max 22 words
-- One sentence
-- Start with subject
+- One sentence only
+- Start with the main subject
 - Use strong verbs
-- No hype or exaggeration
-- No added facts
+- No fluff or filler
+- No speculation or invented facts
+- Grounded but engaging
 
+ARTICLE:
 Title: ${title}
 Description: ${description}
 
@@ -77,14 +98,18 @@ Output only the logline.
 // --- HEADLINE ---
 async function generateHeadline(title) {
   const prompt = `
-Rewrite this headline.
+Rewrite this news headline to be punchy, concise, and engaging.
 
 RULES:
 - Max 12 words
-- Punchy but factual
+- Keep factual accuracy
 - Slight energy allowed, no clickbait
+- No invented facts
 
+HEADLINE:
 ${title}
+
+Return only the improved headline.
 `;
 
   const res = await openai.chat.completions.create({
@@ -109,6 +134,7 @@ async function fetchNews() {
 
     for (const article of news.articles) {
       const { title, description, url } = article;
+
       if (!title || !url) continue;
 
       console.log(`📰 ${title}`);
@@ -118,7 +144,7 @@ async function fetchNews() {
       let bestScore = 0;
 
       for (const story of existing || []) {
-        const score = similarity(title, story.canonical_title);
+        const score = similarity(title, story.original_title || story.canonical_title);
 
         if (score > bestScore) {
           bestScore = score;
@@ -157,6 +183,7 @@ async function fetchNews() {
 
       await supabase.from("stories").insert({
         canonical_title: headline,
+        original_title: title,
         logline,
         sources: [{ title, url }],
         trending_score: 10,
