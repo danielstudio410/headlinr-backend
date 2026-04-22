@@ -117,7 +117,7 @@ async function fetchNews() {
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
     // 🎯 If similar story found → cluster
-    if (bestScore > 0.5 && bestMatch) {
+    if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
         bestMatch.last_seen_at
