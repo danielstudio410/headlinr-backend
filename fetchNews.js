@@ -79,7 +79,7 @@ function initialScore(category) {
   return map[category] || 10;
 }
 
-// 🤖 AI HEADLINE GENERATOR (BALANCED TONE)
+// 🤖 HEADLINE GENERATOR (unchanged)
 async function generateHeadline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -101,12 +101,10 @@ Rules:
 - Lead with the key event or outcome
 - Keep it tight and clean — no unnecessary clauses
 - Allow a touch of energy or drama, but keep it credible
-- Avoid exaggerated or tabloid language (e.g. "horror", "shocking", "devastating")
-- Avoid filler words like "amid", "as", "after", "following"
-- Avoid vague phrasing like "reports", "says", "witnesses"
-- No clickbait or misleading phrasing
-- No source names
-- Should feel modern, sharp, and slightly bold — like a premium news app`
+- Avoid exaggerated or tabloid language
+- Avoid filler words like "amid", "as", "after"
+- No clickbait
+- No source names`
           },
           {
             role: "user",
@@ -119,9 +117,50 @@ Rules:
 
     const data = await res.json();
     return cleanHeadline(data.choices[0].message.content);
-  } catch (err) {
-    console.log("⚠️ Headline generation failed");
+  } catch {
     return cleanHeadline(title);
+  }
+}
+
+// 🎬 NEW: CINEMATIC LOGLINE GENERATOR
+async function generateLogline(title, description) {
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `Write a cinematic but factual news logline.
+
+Rules:
+- 1–2 sentences max
+- 20–35 words total
+- Focus on the core event, stakes, or outcome
+- Use vivid but accurate language
+- Slight dramatic tone is allowed, but stay grounded in reality
+- No exaggeration or invented details
+- Avoid generic phrasing like "this article discusses"
+- Make it feel like a film synopsis, but for real news`
+          },
+          {
+            role: "user",
+            content: `Title: ${title}\nDescription: ${description}`
+          }
+        ],
+        temperature: 0.7
+      })
+    });
+
+    const data = await res.json();
+    return data.choices[0].message.content.trim();
+  } catch {
+    return description || "";
   }
 }
 
@@ -169,7 +208,6 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -182,18 +220,6 @@ async function fetchNews() {
       if (!updatedSources.includes(article.url)) {
         updatedSources.push(article.url);
       }
-
-      // 🔒 Optional: lock headline after enough sources
-      let newHeadline = bestMatch.canonical_title;
-
-      if ((bestMatch.source_count || 1) < 3) {
-        newHeadline = await generateHeadline(
-          article.title,
-          article.description
-        );
-      }
-
-      console.log(`🧠 AI Headline: ${newHeadline}`);
 
       await fetch(
         `${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`,
@@ -208,8 +234,7 @@ async function fetchNews() {
             trending_score: newScore,
             last_seen_at: new Date().toISOString(),
             source_count: updatedSources.length,
-            source_urls: updatedSources,
-            canonical_title: newHeadline
+            source_urls: updatedSources
           })
         }
       );
@@ -218,47 +243,8 @@ async function fetchNews() {
     }
 
     // 🆕 NEW STORY
-    const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(", ")}), country`
-          },
-          {
-            role: "user",
-            content: `Title: ${article.title}\nDescription: ${article.description}`
-          }
-        ],
-        response_format: { type: "json_object" }
-      })
-    });
-
-    const aiData = await aiRes.json();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(aiData.choices[0].message.content);
-    } catch {
-      console.log("❌ AI parse failed");
-      continue;
-    }
-
-    let { logline, category, country } = parsed;
-
-    category = normalizeCategory(category);
-    const score = initialScore(category);
-
-    const headline = await generateHeadline(
-      article.title,
-      article.description
-    );
+    const headline = await generateHeadline(article.title, article.description);
+    const logline = await generateLogline(article.title, article.description);
 
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
       method: "POST",
@@ -271,20 +257,18 @@ async function fetchNews() {
         title: article.title,
         canonical_title: headline,
         description: article.description,
+        logline,
         url: article.url,
         source_urls: [article.url],
-        primary_source: article.url,
-        logline,
-        category,
-        country,
         created_at: new Date().toISOString(),
         last_seen_at: new Date().toISOString(),
-        trending_score: score,
+        trending_score: 10,
         source_count: 1
       })
     });
 
-    console.log("✅ New canonical story created");
+    console.log(`✨ Logline: ${logline}`);
+    console.log("✅ New story created");
   }
 
   console.log("🎉 Done!");
