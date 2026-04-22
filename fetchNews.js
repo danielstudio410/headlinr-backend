@@ -13,16 +13,21 @@ const VALID_CATEGORIES = [
   "entertainment","lifestyle","world","crime","murder","environment"
 ];
 
-// 🧠 Generate story key
-function generateStoryKey(title) {
-  return title
+// 🧠 Clean + tokenize
+function tokenize(text) {
+  return text
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(" ")
-    .filter(word => word.length > 3)
-    .sort()
-    .slice(0, 6)
-    .join(" ");
+    .filter(w => w.length > 3);
+}
+
+// 🧠 similarity score
+function similarity(a, b) {
+  const setA = new Set(tokenize(a));
+  const setB = new Set(tokenize(b));
+  const intersection = [...setA].filter(x => setB.has(x));
+  return intersection.length / Math.max(setA.size, setB.size);
 }
 
 // 🔥 Decay
@@ -58,39 +63,46 @@ function initialScore(category) {
 async function fetchNews() {
   console.log("🚀 Fetching news...");
 
-  const res = await fetch(`https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`);
-  const data = await res.json();
+  const newsRes = await fetch(`https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`);
+  const newsData = await newsRes.json();
 
-  for (const article of data.articles) {
+  // 🧠 Pull recent articles for comparison
+  const existingRes = await fetch(`${SUPABASE_URL}/rest/v1/articles?select=*`, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`
+    }
+  });
+
+  const existingArticles = await existingRes.json();
+
+  for (const article of newsData.articles) {
     if (!article.title || !article.url) continue;
 
-    const storyKey = generateStoryKey(article.title);
-
     console.log(`📰 ${article.title}`);
-    console.log(`🔑 Story Key: ${storyKey}`);
 
-    // 🔍 Check for similar story
-    const checkRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/articles?story_key=eq.${encodeURIComponent(storyKey)}`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`
-        }
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const existing of existingArticles) {
+      const score = similarity(article.title, existing.title);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = existing;
       }
-    );
+    }
 
-    const existing = await checkRes.json();
+    console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    if (existing.length > 0) {
-      const item = existing[0];
+    // 🎯 Threshold
+    if (bestScore > 0.5) {
+      const decayed = applyDecay(bestMatch.trending_score, bestMatch.last_seen_at);
+      const newScore = Math.min(100, decayed + 8);
 
-      const decayed = applyDecay(item.trending_score, item.last_seen_at);
-      const newScore = Math.min(100, decayed + 8); // bigger boost for multi-source
+      console.log(`🔥 Clustered → ${bestMatch.trending_score} → ${newScore}`);
 
-      console.log(`🔥 Cluster boost: ${item.trending_score} → ${newScore}`);
-
-      await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${item.id}`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`, {
         method: "PATCH",
         headers: {
           apikey: SUPABASE_KEY,
@@ -100,14 +112,14 @@ async function fetchNews() {
         body: JSON.stringify({
           trending_score: newScore,
           last_seen_at: new Date().toISOString(),
-          source_count: item.source_count + 1
+          source_count: bestMatch.source_count + 1
         })
       });
 
       continue;
     }
 
-    // 🤖 OpenAI for NEW story
+    // 🤖 New story → call OpenAI
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -141,8 +153,8 @@ async function fetchNews() {
     }
 
     let { logline, category, country } = parsed;
-
     category = normalizeCategory(category);
+
     const score = initialScore(category);
 
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
@@ -159,15 +171,14 @@ async function fetchNews() {
         logline,
         category,
         country,
-        story_key: storyKey,
-        source_count: 1,
         created_at: new Date().toISOString(),
         last_seen_at: new Date().toISOString(),
-        trending_score: score
+        trending_score: score,
+        source_count: 1
       })
     });
 
-    console.log("✅ New clustered story created");
+    console.log("✅ New story");
   }
 
   console.log("🎉 Done!");
