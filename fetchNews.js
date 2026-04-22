@@ -1,302 +1,237 @@
 import fetch from "node-fetch";
-import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
 
-dotenv.config();
-
+// ================= ENV =================
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-const VALID_CATEGORIES = [
-  "politics","business","tech","science","health","sports",
-  "entertainment","lifestyle","world","crime","murder","environment"
-];
+// ================= CLIENTS =================
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// 🧠 Clean headline
-function cleanHeadline(title) {
-  return title
-    .replace(/ - [^-]+$/, "")
-    .replace(/\|.*$/, "")
-    .trim();
-}
+// ================= CONFIG =================
+const SIMILARITY_THRESHOLD = 0.45;
 
-// 🧠 Tokenize
+// ================= HELPERS =================
+
+// --- Clean + tokenize ---
 function tokenize(text) {
-  return cleanHeadline(text)
+  return text
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(" ")
-    .filter(w => w.length > 3);
+    .filter((w) => w.length > 3);
 }
 
-// 🧠 Similarity
+// --- Cosine similarity ---
 function similarity(a, b) {
-  const A = new Set(tokenize(a));
-  const B = new Set(tokenize(b));
-  const overlap = [...A].filter(x => B.has(x));
-  return overlap.length / Math.max(A.size, B.size);
+  const setA = new Set(tokenize(a));
+  const setB = new Set(tokenize(b));
+  const intersection = [...setA].filter((x) => setB.has(x));
+  return intersection.length / Math.max(setA.size, setB.size);
 }
 
-// 🔥 Decay
-function applyDecay(score, lastSeenAt) {
-  const hours = (new Date() - new Date(lastSeenAt)) / (1000 * 60 * 60);
-  return Math.max(0, Math.round(score - hours * 2));
+// ================= ✨ AUTO-TIGHTENING LAYER =================
+
+function tightenLogline(text) {
+  let t = text;
+
+  // --- Remove fluff phrases ---
+  const fluff = [
+    "in a dramatic turn",
+    "in a surprising twist",
+    "in a shocking development",
+    "in a stunning move",
+    "amid growing concerns",
+    "raising questions about",
+    "highlighting",
+    "showcasing",
+    "underscoring",
+    "bringing attention to",
+    "it is reported that",
+  ];
+
+  fluff.forEach((phrase) => {
+    const regex = new RegExp(phrase, "gi");
+    t = t.replace(regex, "");
+  });
+
+  // --- Verb sharpening ---
+  const replacements = [
+    ["is expected to", ""],
+    ["is set to", ""],
+    ["aims to", ""],
+    ["seeks to", ""],
+    ["moves to", ""],
+    ["plans to", ""],
+    ["continues to", ""],
+    ["working to", ""],
+    ["beginning to", ""],
+    ["starting to", ""],
+    ["has begun to", ""],
+    ["has started to", ""],
+  ];
+
+  replacements.forEach(([weak, strong]) => {
+    const regex = new RegExp(weak, "gi");
+    t = t.replace(regex, strong);
+  });
+
+  // --- Remove trailing soft endings ---
+  const softEndings = [
+    "impacting",
+    "affecting",
+    "raising concerns",
+    "prompting questions",
+  ];
+
+  softEndings.forEach((end) => {
+    const regex = new RegExp(`${end}.*$`, "gi");
+    t = t.replace(regex, "");
+  });
+
+  // --- Trim + clean spacing ---
+  t = t.replace(/\s+/g, " ").trim();
+
+  // --- Ensure sentence ends cleanly ---
+  if (!t.endsWith(".")) t += ".";
+
+  return t;
 }
 
-// 🏷 Normalize category
-function normalizeCategory(cat) {
-  if (!cat) return "world";
-  const c = cat.toLowerCase();
+// ================= AI GENERATION =================
 
-  if (VALID_CATEGORIES.includes(c)) return c;
-  if (c.includes("murder") || c.includes("kill")) return "murder";
-  if (c.includes("crime")) return "crime";
-  if (c.includes("tech")) return "tech";
-  if (c.includes("politic")) return "politics";
-  if (c.includes("business")) return "business";
-
-  return "world";
-}
-
-// 📈 Initial score
-function initialScore(category) {
-  const map = {
-    murder: 25,
-    crime: 20,
-    politics: 18,
-    world: 15,
-    tech: 10,
-    business: 10,
-    entertainment: 12,
-    sports: 10,
-    health: 8,
-    science: 8,
-    lifestyle: 5,
-    environment: 6
-  };
-  return map[category] || 10;
-}
-
-// 🤖 HEADLINE GENERATOR
-async function generateHeadline(title, description) {
-  try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `Write a concise, punchy news headline.
-
-Rules:
-- 8 to 12 words
-- Use strong, active verbs
-- Lead with the key event or outcome
-- Keep it tight and clean
-- Allow slight energy but stay credible
-- No clickbait
-- No source names`
-          },
-          {
-            role: "user",
-            content: `Title: ${title}\nDescription: ${description}`
-          }
-        ],
-        temperature: 0.6
-      })
-    });
-
-    const data = await res.json();
-
-    if (!data.choices || !data.choices[0]) {
-      console.error("⚠️ OpenAI headline error:", data);
-      return cleanHeadline(title);
-    }
-
-    return cleanHeadline(data.choices[0].message.content);
-  } catch (err) {
-    console.error("⚠️ Headline generation failed:", err);
-    return cleanHeadline(title);
-  }
-}
-
-// 🎬 LOGLINE GENERATOR (UPGRADE 1: SHARPER PROMPT)
+// --- Logline ---
 async function generateLogline(title, description) {
-  try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `Write a tight, cinematic news logline.
+  const prompt = `
+Write a tight, cinematic news logline.
 
-Rules:
-- 1–2 sentences max
-- 16–24 words total (strict)
-- Lead with the key event or outcome
-- Use strong, precise verbs (avoid weak phrasing like "offers", "explores", "aims to")
-- Eliminate filler words and generic phrases
-- Avoid vague language (e.g. "highlights", "a look at", "raises questions")
-- No dramatic filler (e.g. "in a shocking twist", "in a dramatic turn")
-- No speculation or added interpretation
-- Only include details clearly supported by the source
-- Keep tone sharp, grounded, and slightly cinematic
-- Make every word earn its place`
-          },
-          {
-            role: "user",
-            content: `Title: ${title}\nDescription: ${description}`
-          }
-        ],
-        temperature: 0.65
-      })
-    });
+RULES:
+- Max 22 words
+- One sentence only
+- Start with the main subject
+- Use strong verbs (avoid: "is", "are", "shows", "highlights")
+- No filler or fluff
+- No speculation or added facts
+- Grounded but engaging
 
-    const data = await res.json();
+ARTICLE:
+Title: ${title}
+Description: ${description}
 
-    if (!data.choices || !data.choices[0]) {
-      console.error("⚠️ OpenAI logline error:", data);
-      return description || "";
-    }
+Output only the logline.
+`;
 
-    return data.choices[0].message.content.trim();
-  } catch (err) {
-    console.error("⚠️ Logline generation failed:", err);
-    return description || "";
-  }
+  const res = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const raw = res.choices[0].message.content.trim();
+  return tightenLogline(raw);
 }
+
+// --- Headline ---
+async function generateHeadline(title) {
+  const prompt = `
+Rewrite this news headline to be punchy, concise, and engaging.
+
+RULES:
+- Max 12 words
+- Keep factual accuracy
+- Slightly dramatic but not clickbait
+- No exaggeration or invented facts
+
+HEADLINE:
+${title}
+
+Return only the improved headline.
+`;
+
+  const res = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  return res.choices[0].message.content.trim();
+}
+
+// ================= MAIN =================
 
 async function fetchNews() {
-  console.log("🚀 Fetching news...");
+  try {
+    console.log("🚀 Fetching news...");
 
-  const newsRes = await fetch(
-    `https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`
-  );
-  const newsData = await newsRes.json();
+    const url = `https://newsapi.org/v2/top-headlines?country=us&pageSize=20&apiKey=${NEWS_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
 
-  const existingRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/articles?select=*`,
-    {
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`
-      }
-    }
-  );
+    const articles = data.articles;
 
-  const existingArticles = await existingRes.json();
+    for (const article of articles) {
+      const { title, description, url } = article;
 
-  for (const article of newsData.articles) {
-    if (!article.title || !article.url) continue;
+      if (!title || !url) continue;
 
-    console.log(`📰 ${article.title}`);
+      console.log(`📰 ${title}`);
 
-    let bestMatch = null;
-    let bestScore = 0;
+      // --- Check existing stories ---
+      const { data: existingStories } = await supabase
+        .from("stories")
+        .select("*");
 
-    for (const existing of existingArticles) {
-      if (existing.url === article.url) continue;
+      let matched = null;
+      let bestScore = 0;
 
-      const score = similarity(
-        article.title,
-        existing.canonical_title || existing.title
-      );
+      for (const story of existingStories || []) {
+        const score = similarity(title, story.title);
 
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = existing;
-      }
-    }
-
-    console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
-
-    // 🔁 CLUSTER MATCH
-    if (bestScore >= 0.45 && bestMatch) {
-      const decayed = applyDecay(
-        bestMatch.trending_score,
-        bestMatch.last_seen_at
-      );
-
-      const newScore = Math.min(100, decayed + 8);
-
-      const updatedSources = Array.isArray(bestMatch.source_urls)
-        ? bestMatch.source_urls
-        : bestMatch.source_urls
-          ? [bestMatch.source_urls]
-          : [];
-
-      if (!updatedSources.includes(article.url)) {
-        updatedSources.push(article.url);
-      }
-
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`,
-        {
-          method: "PATCH",
-          headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            trending_score: newScore,
-            last_seen_at: new Date().toISOString(),
-            source_count: updatedSources.length,
-            source_urls: updatedSources
-          })
+        if (score > bestScore) {
+          bestScore = score;
+          matched = story;
         }
-      );
+      }
 
-      console.log(`🔥 Clustered → ${bestMatch.trending_score} → ${newScore}`);
-      continue;
+      console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
+
+      if (matched && bestScore >= SIMILARITY_THRESHOLD) {
+        const newScore = matched.trending_score + 5;
+
+        await supabase
+          .from("stories")
+          .update({ trending_score: newScore })
+          .eq("id", matched.id);
+
+        console.log(`🔥 Clustered → ${matched.trending_score} → ${newScore}`);
+        continue;
+      }
+
+      // --- Generate AI content ---
+      const logline = await generateLogline(title, description);
+      const headline = await generateHeadline(title);
+
+      console.log(`✨ Logline: ${logline}`);
+
+      // --- Insert ---
+      await supabase.from("stories").insert({
+        title: headline,
+        original_title: title,
+        logline: logline,
+        url: url,
+        trending_score: 10,
+      });
+
+      console.log("✅ New story created");
     }
 
-    // 🆕 NEW STORY
-    const headline = await generateHeadline(article.title, article.description);
-    const logline = await generateLogline(article.title, article.description);
-
-    await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        title: article.title,
-        canonical_title: headline,
-        description: article.description,
-        logline,
-        url: article.url,
-        source_urls: [article.url],
-        created_at: new Date().toISOString(),
-        last_seen_at: new Date().toISOString(),
-        trending_score: 10,
-        source_count: 1
-      })
-    });
-
-    console.log(`✨ Logline: ${logline}`);
-    console.log("✅ New story created");
+    console.log("🎉 Done!");
+  } catch (err) {
+    console.error("❌ FULL ERROR:", err);
+    process.exit(1);
   }
-
-  console.log("🎉 Done!");
 }
 
-// ✅ SAFE ERROR HANDLING
-fetchNews().catch(err => {
-  console.error("❌ FULL ERROR:", err);
-  process.exit(1);
-});
+fetchNews();
