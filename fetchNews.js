@@ -75,11 +75,10 @@ function initialScore(category) {
     lifestyle: 5,
     environment: 6
   };
-
   return map[category] || 10;
 }
 
-// 🤖 HEADLINE GENERATOR (unchanged)
+// 🤖 HEADLINE GENERATOR
 async function generateHeadline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -96,13 +95,11 @@ async function generateHeadline(title, description) {
             content: `Write a concise, punchy news headline.
 
 Rules:
-- 8 to 12 words (strict)
+- 8 to 12 words
 - Use strong, active verbs
 - Lead with the key event or outcome
-- Keep it tight and clean — no unnecessary clauses
-- Allow a touch of energy or drama, but keep it credible
-- Avoid exaggerated or tabloid language
-- Avoid filler words like "amid", "as", "after"
+- Keep it tight and clean
+- Allow slight energy but stay credible
 - No clickbait
 - No source names`
           },
@@ -122,7 +119,7 @@ Rules:
   }
 }
 
-// 🎬 NEW: CINEMATIC LOGLINE GENERATOR
+// 🎬 UPDATED LOGLINE GENERATOR (FIXED)
 async function generateLogline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -136,24 +133,25 @@ async function generateLogline(title, description) {
         messages: [
           {
             role: "system",
-            content: `Write a cinematic but factual news logline.
+            content: `Write a cinematic but grounded news logline.
 
 Rules:
 - 1–2 sentences max
-- 20–35 words total
-- Focus on the core event, stakes, or outcome
-- Use vivid but accurate language
-- Slight dramatic tone is allowed, but stay grounded in reality
-- No exaggeration or invented details
-- Avoid generic phrasing like "this article discusses"
-- Make it feel like a film synopsis, but for real news`
+- 18–28 words total
+- Focus on the core event and outcome
+- Use strong, clear language (no fluff)
+- Keep tone engaging but factual
+- Avoid dramatic filler phrases (e.g. "in a shocking twist", "in a dramatic turn")
+- Avoid exaggerated or emotional language unless explicitly supported by facts
+- No speculation or added interpretation
+- Make it feel sharp and story-driven, like a film synopsis grounded in reality`
           },
           {
             role: "user",
             content: `Title: ${title}\nDescription: ${description}`
           }
         ],
-        temperature: 0.7
+        temperature: 0.65
       })
     });
 
@@ -208,6 +206,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
+    // 🔁 EXISTING STORY (CLUSTER)
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -239,6 +238,7 @@ async function fetchNews() {
         }
       );
 
+      console.log(`🔥 Clustered → ${bestMatch.trending_score} → ${newScore}`);
       continue;
     }
 
