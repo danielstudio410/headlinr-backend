@@ -13,11 +13,11 @@ const VALID_CATEGORIES = [
   "entertainment","lifestyle","world","crime","murder","environment"
 ];
 
-// 🧠 Clean headline (REMOVE source clutter)
+// 🧠 Clean headline
 function cleanHeadline(title) {
   return title
-    .replace(/ - [^-]+$/, "") // remove " - CNN"
-    .replace(/\|.*$/, "")     // remove "| BBC"
+    .replace(/ - [^-]+$/, "")
+    .replace(/\|.*$/, "")
     .trim();
 }
 
@@ -79,38 +79,43 @@ function initialScore(category) {
   return map[category] || 10;
 }
 
-// 🧠 Headline scoring (IMPROVED)
-function scoreHeadline(title) {
-  const clean = cleanHeadline(title);
-  let score = 0;
+// 🤖 NEW: Generate canonical headline (controlled tone)
+async function generateHeadline(title, description) {
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `Write a concise, factual news headline.
+- 8 to 14 words
+- Clear and direct
+- No exaggeration or sensationalism
+- No clickbait
+- No source names
+- Neutral but engaging tone`
+          },
+          {
+            role: "user",
+            content: `Title: ${title}\nDescription: ${description}`
+          }
+        ],
+        temperature: 0.4
+      })
+    });
 
-  const length = clean.length;
-
-  // Ideal length
-  if (length > 50 && length < 100) score += 10;
-
-  // Penalize too long
-  if (length > 110) score -= 5;
-
-  // Penalize vague phrasing
-  if (clean.toLowerCase().includes("live")) score -= 5;
-  if (clean.toLowerCase().includes("updates")) score -= 5;
-
-  // Penalize clutter
-  if (clean.includes(":")) score -= 2;
-
-  // Light reward for specificity
-  if (/\d/.test(clean)) score += 2;
-
-  return score;
-}
-
-// 🧠 Pick better headline
-function pickBetterHeadline(existing, incoming) {
-  const existingScore = scoreHeadline(existing);
-  const incomingScore = scoreHeadline(incoming);
-
-  return incomingScore > existingScore ? incoming : existing;
+    const data = await res.json();
+    return cleanHeadline(data.choices[0].message.content);
+  } catch (err) {
+    console.log("⚠️ Headline generation failed");
+    return cleanHeadline(title);
+  }
 }
 
 async function fetchNews() {
@@ -142,7 +147,6 @@ async function fetchNews() {
     let bestScore = 0;
 
     for (const existing of existingArticles) {
-      // ❗ Skip exact same article
       if (existing.url === article.url) continue;
 
       const score = similarity(
@@ -158,7 +162,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY → UPDATE
+    // 🔁 EXISTING STORY
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -172,15 +176,13 @@ async function fetchNews() {
         updatedSources.push(article.url);
       }
 
-      // 🧠 Pick better headline
-      const betterHeadlineRaw = pickBetterHeadline(
-        bestMatch.canonical_title || bestMatch.title,
-        article.title
+      // 🤖 Generate improved canonical headline
+      const newHeadline = await generateHeadline(
+        article.title,
+        article.description
       );
 
-      const betterHeadline = cleanHeadline(betterHeadlineRaw);
-
-      console.log(`🧠 Canonical title: ${betterHeadline}`);
+      console.log(`🧠 AI Headline: ${newHeadline}`);
 
       await fetch(
         `${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`,
@@ -196,7 +198,7 @@ async function fetchNews() {
             last_seen_at: new Date().toISOString(),
             source_count: updatedSources.length,
             source_urls: updatedSources,
-            canonical_title: betterHeadline
+            canonical_title: newHeadline
           })
         }
       );
@@ -204,7 +206,7 @@ async function fetchNews() {
       continue;
     }
 
-    // 🆕 NEW STORY → OpenAI
+    // 🆕 NEW STORY
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -244,7 +246,11 @@ async function fetchNews() {
     category = normalizeCategory(category);
     const score = initialScore(category);
 
-    const cleanTitle = cleanHeadline(article.title);
+    // 🤖 Generate canonical headline
+    const headline = await generateHeadline(
+      article.title,
+      article.description
+    );
 
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
       method: "POST",
@@ -255,7 +261,7 @@ async function fetchNews() {
       },
       body: JSON.stringify({
         title: article.title,
-        canonical_title: cleanTitle,
+        canonical_title: headline,
         description: article.description,
         url: article.url,
         source_urls: [article.url],
