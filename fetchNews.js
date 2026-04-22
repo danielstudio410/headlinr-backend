@@ -126,7 +126,7 @@ Rules:
   }
 }
 
-// 🎬 LOGLINE GENERATOR (REFINED)
+// 🎬 LOGLINE GENERATOR (UPGRADE 1: SHARPER PROMPT)
 async function generateLogline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -140,18 +140,20 @@ async function generateLogline(title, description) {
         messages: [
           {
             role: "system",
-            content: `Write a cinematic but grounded news logline.
+            content: `Write a tight, cinematic news logline.
 
 Rules:
 - 1–2 sentences max
-- 18–28 words total
-- Focus on the core event and outcome
-- Use strong, clear language (no fluff)
-- Keep tone engaging but factual
-- Avoid dramatic filler phrases (e.g. "in a shocking twist", "in a dramatic turn")
-- Avoid exaggerated or emotional language unless explicitly supported by facts
+- 16–24 words total (strict)
+- Lead with the key event or outcome
+- Use strong, precise verbs (avoid weak phrasing like "offers", "explores", "aims to")
+- Eliminate filler words and generic phrases
+- Avoid vague language (e.g. "highlights", "a look at", "raises questions")
+- No dramatic filler (e.g. "in a shocking twist", "in a dramatic turn")
 - No speculation or added interpretation
-- Make it feel sharp and story-driven, like a film synopsis grounded in reality`
+- Only include details clearly supported by the source
+- Keep tone sharp, grounded, and slightly cinematic
+- Make every word earn its place`
           },
           {
             role: "user",
@@ -229,7 +231,6 @@ async function fetchNews() {
 
       const newScore = Math.min(100, decayed + 8);
 
-      // ✅ FIXED ARRAY HANDLING
       const updatedSources = Array.isArray(bestMatch.source_urls)
         ? bestMatch.source_urls
         : bestMatch.source_urls
