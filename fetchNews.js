@@ -13,35 +13,38 @@ const VALID_CATEGORIES = [
   "entertainment","lifestyle","world","crime","murder","environment"
 ];
 
-function normalizeCategory(category) {
-  if (!category) return "world";
-  const clean = category.toLowerCase().trim();
-  if (VALID_CATEGORIES.includes(clean)) return clean;
+// 🧠 Generate story key
+function generateStoryKey(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(" ")
+    .filter(word => word.length > 3)
+    .sort()
+    .slice(0, 6)
+    .join(" ");
+}
 
-  if (clean.includes("tech")) return "tech";
-  if (clean.includes("politic")) return "politics";
-  if (clean.includes("business")) return "business";
-  if (clean.includes("sport")) return "sports";
-  if (clean.includes("entertain")) return "entertainment";
-  if (clean.includes("health")) return "health";
-  if (clean.includes("science")) return "science";
-  if (clean.includes("crime")) return "crime";
-  if (clean.includes("murder") || clean.includes("kill")) return "murder";
+// 🔥 Decay
+function applyDecay(score, lastSeenAt) {
+  const hours = (new Date() - new Date(lastSeenAt)) / (1000 * 60 * 60);
+  return Math.max(0, Math.round(score - hours * 2));
+}
 
+// 🏷 Normalize category
+function normalizeCategory(cat) {
+  if (!cat) return "world";
+  const c = cat.toLowerCase();
+  if (VALID_CATEGORIES.includes(c)) return c;
+  if (c.includes("murder") || c.includes("kill")) return "murder";
+  if (c.includes("crime")) return "crime";
+  if (c.includes("tech")) return "tech";
+  if (c.includes("politic")) return "politics";
+  if (c.includes("business")) return "business";
   return "world";
 }
 
-// ✅ FIXED decay using last_seen_at
-function applyDecay(score, lastSeenAt) {
-  const now = new Date();
-  const lastSeen = new Date(lastSeenAt);
-
-  const hoursOld = (now - lastSeen) / (1000 * 60 * 60);
-  const decay = hoursOld * 2;
-
-  return Math.max(0, Math.round(score - decay));
-}
-
+// 📈 Initial score
 function initialScore(category) {
   const map = {
     murder: 25, crime: 20, politics: 18, world: 15,
@@ -61,10 +64,14 @@ async function fetchNews() {
   for (const article of data.articles) {
     if (!article.title || !article.url) continue;
 
-    console.log(`📰 Processing: ${article.title}`);
+    const storyKey = generateStoryKey(article.title);
 
+    console.log(`📰 ${article.title}`);
+    console.log(`🔑 Story Key: ${storyKey}`);
+
+    // 🔍 Check for similar story
     const checkRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/articles?url=eq.${encodeURIComponent(article.url)}`,
+      `${SUPABASE_URL}/rest/v1/articles?story_key=eq.${encodeURIComponent(storyKey)}`,
       {
         headers: {
           apikey: SUPABASE_KEY,
@@ -78,16 +85,12 @@ async function fetchNews() {
     if (existing.length > 0) {
       const item = existing[0];
 
-      const decayed = applyDecay(
-        item.trending_score,
-        item.last_seen_at
-      );
+      const decayed = applyDecay(item.trending_score, item.last_seen_at);
+      const newScore = Math.min(100, decayed + 8); // bigger boost for multi-source
 
-      const newScore = Math.min(100, decayed + 5);
+      console.log(`🔥 Cluster boost: ${item.trending_score} → ${newScore}`);
 
-      console.log(`🔥 Score: ${item.trending_score} → ${decayed} → ${newScore}`);
-
-      await fetch(`${SUPABASE_URL}/rest/v1/articles?url=eq.${encodeURIComponent(article.url)}`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${item.id}`, {
         method: "PATCH",
         headers: {
           apikey: SUPABASE_KEY,
@@ -96,14 +99,15 @@ async function fetchNews() {
         },
         body: JSON.stringify({
           trending_score: newScore,
-          last_seen_at: new Date().toISOString()
+          last_seen_at: new Date().toISOString(),
+          source_count: item.source_count + 1
         })
       });
 
       continue;
     }
 
-    // OpenAI
+    // 🤖 OpenAI for NEW story
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -115,7 +119,7 @@ async function fetchNews() {
         messages: [
           {
             role: "system",
-            content: `Return JSON with logline, category (ONLY from: ${VALID_CATEGORIES.join(", ")}), country`
+            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(", ")}), country`
           },
           {
             role: "user",
@@ -137,8 +141,8 @@ async function fetchNews() {
     }
 
     let { logline, category, country } = parsed;
-    category = normalizeCategory(category);
 
+    category = normalizeCategory(category);
     const score = initialScore(category);
 
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
@@ -155,13 +159,15 @@ async function fetchNews() {
         logline,
         category,
         country,
+        story_key: storyKey,
+        source_count: 1,
         created_at: new Date().toISOString(),
         last_seen_at: new Date().toISOString(),
         trending_score: score
       })
     });
 
-    console.log("✅ Inserted");
+    console.log("✅ New clustered story created");
   }
 
   console.log("🎉 Done!");
