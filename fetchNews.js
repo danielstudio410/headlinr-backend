@@ -13,9 +13,21 @@ const VALID_CATEGORIES = [
   "entertainment","lifestyle","world","crime","murder","environment"
 ];
 
+// 🧠 Clean headline (REMOVE source clutter)
+function cleanHeadline(title) {
+  return title
+    .replace(/ - [^-]+$/, "") // remove " - CNN"
+    .replace(/\|.*$/, "")     // remove "| BBC"
+    .trim();
+}
+
 // 🧠 Tokenize
 function tokenize(text) {
-  return text.toLowerCase().replace(/[^\w\s]/g, "").split(" ").filter(w => w.length > 3);
+  return cleanHeadline(text)
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(" ")
+    .filter(w => w.length > 3);
 }
 
 // 🧠 Similarity
@@ -67,24 +79,28 @@ function initialScore(category) {
   return map[category] || 10;
 }
 
-// 🧠 NEW: Headline scoring
+// 🧠 Headline scoring (IMPROVED)
 function scoreHeadline(title) {
+  const clean = cleanHeadline(title);
   let score = 0;
 
-  const length = title.length;
+  const length = clean.length;
 
-  // Ideal length (50–100 chars)
+  // Ideal length
   if (length > 50 && length < 100) score += 10;
 
-  // Penalize very long
-  if (length > 120) score -= 5;
+  // Penalize too long
+  if (length > 110) score -= 5;
 
-  // Penalize vague phrases
-  if (title.toLowerCase().includes("live")) score -= 5;
-  if (title.toLowerCase().includes("updates")) score -= 5;
+  // Penalize vague phrasing
+  if (clean.toLowerCase().includes("live")) score -= 5;
+  if (clean.toLowerCase().includes("updates")) score -= 5;
 
-  // Reward specificity (numbers, names)
-  if (/\d/.test(title)) score += 3;
+  // Penalize clutter
+  if (clean.includes(":")) score -= 2;
+
+  // Light reward for specificity
+  if (/\d/.test(clean)) score += 2;
 
   return score;
 }
@@ -100,15 +116,20 @@ function pickBetterHeadline(existing, incoming) {
 async function fetchNews() {
   console.log("🚀 Fetching news...");
 
-  const newsRes = await fetch(`https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`);
+  const newsRes = await fetch(
+    `https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`
+  );
   const newsData = await newsRes.json();
 
-  const existingRes = await fetch(`${SUPABASE_URL}/rest/v1/articles?select=*`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`
+  const existingRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/articles?select=*`,
+    {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`
+      }
     }
-  });
+  );
 
   const existingArticles = await existingRes.json();
 
@@ -121,9 +142,13 @@ async function fetchNews() {
     let bestScore = 0;
 
     for (const existing of existingArticles) {
+      // ❗ Skip exact same article
       if (existing.url === article.url) continue;
 
-      const score = similarity(article.title, existing.canonical_title || existing.title);
+      const score = similarity(
+        article.title,
+        existing.canonical_title || existing.title
+      );
 
       if (score > bestScore) {
         bestScore = score;
@@ -133,9 +158,13 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY
+    // 🔁 EXISTING STORY → UPDATE
     if (bestScore >= 0.45 && bestMatch) {
-      const decayed = applyDecay(bestMatch.trending_score, bestMatch.last_seen_at);
+      const decayed = applyDecay(
+        bestMatch.trending_score,
+        bestMatch.last_seen_at
+      );
+
       const newScore = Math.min(100, decayed + 8);
 
       const updatedSources = bestMatch.source_urls || [];
@@ -143,34 +172,39 @@ async function fetchNews() {
         updatedSources.push(article.url);
       }
 
-      // 🧠 NEW: choose better headline
-      const betterHeadline = pickBetterHeadline(
+      // 🧠 Pick better headline
+      const betterHeadlineRaw = pickBetterHeadline(
         bestMatch.canonical_title || bestMatch.title,
         article.title
       );
 
+      const betterHeadline = cleanHeadline(betterHeadlineRaw);
+
       console.log(`🧠 Canonical title: ${betterHeadline}`);
 
-      await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`, {
-        method: "PATCH",
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          trending_score: newScore,
-          last_seen_at: new Date().toISOString(),
-          source_count: updatedSources.length,
-          source_urls: updatedSources,
-          canonical_title: betterHeadline
-        })
-      });
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            trending_score: newScore,
+            last_seen_at: new Date().toISOString(),
+            source_count: updatedSources.length,
+            source_urls: updatedSources,
+            canonical_title: betterHeadline
+          })
+        }
+      );
 
       continue;
     }
 
-    // 🆕 NEW STORY
+    // 🆕 NEW STORY → OpenAI
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -182,7 +216,9 @@ async function fetchNews() {
         messages: [
           {
             role: "system",
-            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(", ")}), country`
+            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(
+              ", "
+            )}), country`
           },
           {
             role: "user",
@@ -208,6 +244,8 @@ async function fetchNews() {
     category = normalizeCategory(category);
     const score = initialScore(category);
 
+    const cleanTitle = cleanHeadline(article.title);
+
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
       method: "POST",
       headers: {
@@ -217,7 +255,7 @@ async function fetchNews() {
       },
       body: JSON.stringify({
         title: article.title,
-        canonical_title: article.title,
+        canonical_title: cleanTitle,
         description: article.description,
         url: article.url,
         source_urls: [article.url],
