@@ -23,6 +23,7 @@ const VALID_CATEGORIES = [
   "environment"
 ];
 
+// ✅ Normalize category
 function normalizeCategory(category) {
   if (!category) return "world";
 
@@ -44,34 +45,39 @@ function normalizeCategory(category) {
   return "world";
 }
 
-function calculateTrendingScore({ publishedAt, duplicateCount, category }) {
+// 🔥 NEW: Apply decay
+function applyDecay(existingScore, lastUpdatedAt) {
   const now = new Date();
-  const published = new Date(publishedAt);
+  const lastUpdate = new Date(lastUpdatedAt);
 
-  const hoursOld = (now - published) / (1000 * 60 * 60);
-  const recencyScore = Math.max(0, 50 - hoursOld * 2);
+  const hoursOld = (now - lastUpdate) / (1000 * 60 * 60);
 
-  const duplicateScore = Math.min(40, duplicateCount * 10);
+  // Decay: lose 2 points per hour
+  const decay = hoursOld * 2;
 
+  const decayedScore = existingScore - decay;
+
+  return Math.max(0, Math.round(decayedScore));
+}
+
+// 📈 Base scoring for NEW articles
+function calculateInitialScore(category) {
   const categoryBoostMap = {
-    murder: 20,
-    crime: 15,
-    politics: 12,
-    world: 10,
-    tech: 6,
-    business: 6,
-    entertainment: 8,
-    sports: 6,
-    health: 5,
-    science: 5,
-    lifestyle: 3,
-    environment: 4
+    murder: 25,
+    crime: 20,
+    politics: 18,
+    world: 15,
+    tech: 10,
+    business: 10,
+    entertainment: 12,
+    sports: 10,
+    health: 8,
+    science: 8,
+    lifestyle: 5,
+    environment: 6
   };
 
-  const categoryScore = categoryBoostMap[category] || 0;
-
-  const total = recencyScore + duplicateScore + categoryScore;
-  return Math.round(Math.min(100, total));
+  return categoryBoostMap[category] || 10;
 }
 
 async function fetchNews() {
@@ -99,13 +105,20 @@ async function fetchNews() {
 
     const existing = await checkRes.json();
 
-    // 🔥 IF EXISTS → UPDATE TRENDING
+    // 🔥 EXISTING ARTICLE → APPLY DECAY + BOOST
     if (existing.length > 0) {
       const existingArticle = existing[0];
 
-      const newScore = Math.min(100, existingArticle.trending_score + 5);
+      const decayedScore = applyDecay(
+        existingArticle.trending_score,
+        existingArticle.created_at
+      );
 
-      console.log(`🔥 Updating trending score: ${existingArticle.trending_score} → ${newScore}`);
+      const newScore = Math.min(100, decayedScore + 5);
+
+      console.log(
+        `🔥 Score: ${existingArticle.trending_score} → ${decayedScore} (decay) → ${newScore} (boost)`
+      );
 
       await fetch(`${SUPABASE_URL}/rest/v1/articles?url=eq.${encodeURIComponent(article.url)}`, {
         method: "PATCH",
@@ -124,7 +137,7 @@ async function fetchNews() {
       continue;
     }
 
-    // 🤖 OpenAI for NEW articles only
+    // 🤖 OpenAI for new articles
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -142,9 +155,7 @@ Fields:
 - logline: short cinematic summary
 - category: MUST be one of these EXACT values:
 ${VALID_CATEGORIES.join(", ")}
-- country: country name
-
-Do not invent categories.`
+- country: country name`
           },
           {
             role: "user",
@@ -170,16 +181,12 @@ Description: ${article.description}`
 
     category = normalizeCategory(category);
 
-    const trendingScore = calculateTrendingScore({
-      publishedAt: article.publishedAt,
-      duplicateCount: 1,
-      category
-    });
+    const trendingScore = calculateInitialScore(category);
 
     console.log(`✨ Logline: ${logline}`);
     console.log(`🏷 Category: ${category}`);
     console.log(`🌍 Country: ${country}`);
-    console.log(`🔥 Trending Score: ${trendingScore}`);
+    console.log(`🔥 Initial Score: ${trendingScore}`);
 
     const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
       method: "POST",
