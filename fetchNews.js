@@ -13,7 +13,7 @@ const VALID_CATEGORIES = [
   "entertainment","lifestyle","world","crime","murder","environment"
 ];
 
-// 🧠 Clean + tokenize
+// 🧠 Tokenize text
 function tokenize(text) {
   return text
     .toLowerCase()
@@ -22,7 +22,7 @@ function tokenize(text) {
     .filter(w => w.length > 3);
 }
 
-// 🧠 similarity score
+// 🧠 Similarity score
 function similarity(a, b) {
   const setA = new Set(tokenize(a));
   const setB = new Set(tokenize(b));
@@ -30,7 +30,7 @@ function similarity(a, b) {
   return intersection.length / Math.max(setA.size, setB.size);
 }
 
-// 🔥 Decay
+// 🔥 Apply decay
 function applyDecay(score, lastSeenAt) {
   const hours = (new Date() - new Date(lastSeenAt)) / (1000 * 60 * 60);
   return Math.max(0, Math.round(score - hours * 2));
@@ -40,39 +40,56 @@ function applyDecay(score, lastSeenAt) {
 function normalizeCategory(cat) {
   if (!cat) return "world";
   const c = cat.toLowerCase();
+
   if (VALID_CATEGORIES.includes(c)) return c;
   if (c.includes("murder") || c.includes("kill")) return "murder";
   if (c.includes("crime")) return "crime";
   if (c.includes("tech")) return "tech";
   if (c.includes("politic")) return "politics";
   if (c.includes("business")) return "business";
+
   return "world";
 }
 
 // 📈 Initial score
 function initialScore(category) {
   const map = {
-    murder: 25, crime: 20, politics: 18, world: 15,
-    tech: 10, business: 10, entertainment: 12,
-    sports: 10, health: 8, science: 8,
-    lifestyle: 5, environment: 6
+    murder: 25,
+    crime: 20,
+    politics: 18,
+    world: 15,
+    tech: 10,
+    business: 10,
+    entertainment: 12,
+    sports: 10,
+    health: 8,
+    science: 8,
+    lifestyle: 5,
+    environment: 6
   };
+
   return map[category] || 10;
 }
 
 async function fetchNews() {
   console.log("🚀 Fetching news...");
 
-  const newsRes = await fetch(`https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`);
+  // 📰 Fetch latest news
+  const newsRes = await fetch(
+    `https://newsapi.org/v2/top-headlines?language=en&pageSize=50&apiKey=${NEWS_API_KEY}`
+  );
   const newsData = await newsRes.json();
 
-  // 🧠 Pull recent articles for comparison
-  const existingRes = await fetch(`${SUPABASE_URL}/rest/v1/articles?select=*`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`
+  // 🧠 Fetch existing articles
+  const existingRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/articles?select=*`,
+    {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`
+      }
     }
-  });
+  );
 
   const existingArticles = await existingRes.json();
 
@@ -85,6 +102,10 @@ async function fetchNews() {
     let bestScore = 0;
 
     for (const existing of existingArticles) {
+
+      // ❗ CRITICAL FIX: skip exact same article
+      if (existing.url === article.url) continue;
+
       const score = similarity(article.title, existing.title);
 
       if (score > bestScore) {
@@ -95,31 +116,40 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🎯 Threshold
-    if (bestScore > 0.5) {
-      const decayed = applyDecay(bestMatch.trending_score, bestMatch.last_seen_at);
+    // 🎯 If similar story found → cluster
+    if (bestScore > 0.5 && bestMatch) {
+      const decayed = applyDecay(
+        bestMatch.trending_score,
+        bestMatch.last_seen_at
+      );
+
       const newScore = Math.min(100, decayed + 8);
 
-      console.log(`🔥 Clustered → ${bestMatch.trending_score} → ${newScore}`);
+      console.log(
+        `🔥 Clustered → ${bestMatch.trending_score} → ${newScore}`
+      );
 
-      await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`, {
-        method: "PATCH",
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          trending_score: newScore,
-          last_seen_at: new Date().toISOString(),
-          source_count: bestMatch.source_count + 1
-        })
-      });
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            trending_score: newScore,
+            last_seen_at: new Date().toISOString(),
+            source_count: (bestMatch.source_count || 1) + 1
+          })
+        }
+      );
 
       continue;
     }
 
-    // 🤖 New story → call OpenAI
+    // 🤖 New story → OpenAI
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -131,7 +161,9 @@ async function fetchNews() {
         messages: [
           {
             role: "system",
-            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(", ")}), country`
+            content: `Return JSON with logline, category (${VALID_CATEGORIES.join(
+              ", "
+            )}), country`
           },
           {
             role: "user",
@@ -153,8 +185,8 @@ async function fetchNews() {
     }
 
     let { logline, category, country } = parsed;
-    category = normalizeCategory(category);
 
+    category = normalizeCategory(category);
     const score = initialScore(category);
 
     await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
