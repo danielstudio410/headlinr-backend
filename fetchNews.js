@@ -36,24 +36,65 @@ function applyDecay(score, lastSeenAt) {
 function normalizeCategory(cat) {
   if (!cat) return "world";
   const c = cat.toLowerCase();
+
   if (VALID_CATEGORIES.includes(c)) return c;
   if (c.includes("murder") || c.includes("kill")) return "murder";
   if (c.includes("crime")) return "crime";
   if (c.includes("tech")) return "tech";
   if (c.includes("politic")) return "politics";
   if (c.includes("business")) return "business";
+
   return "world";
 }
 
 // 📈 Initial score
 function initialScore(category) {
   const map = {
-    murder: 25, crime: 20, politics: 18, world: 15,
-    tech: 10, business: 10, entertainment: 12,
-    sports: 10, health: 8, science: 8,
-    lifestyle: 5, environment: 6
+    murder: 25,
+    crime: 20,
+    politics: 18,
+    world: 15,
+    tech: 10,
+    business: 10,
+    entertainment: 12,
+    sports: 10,
+    health: 8,
+    science: 8,
+    lifestyle: 5,
+    environment: 6
   };
+
   return map[category] || 10;
+}
+
+// 🧠 NEW: Headline scoring
+function scoreHeadline(title) {
+  let score = 0;
+
+  const length = title.length;
+
+  // Ideal length (50–100 chars)
+  if (length > 50 && length < 100) score += 10;
+
+  // Penalize very long
+  if (length > 120) score -= 5;
+
+  // Penalize vague phrases
+  if (title.toLowerCase().includes("live")) score -= 5;
+  if (title.toLowerCase().includes("updates")) score -= 5;
+
+  // Reward specificity (numbers, names)
+  if (/\d/.test(title)) score += 3;
+
+  return score;
+}
+
+// 🧠 Pick better headline
+function pickBetterHeadline(existing, incoming) {
+  const existingScore = scoreHeadline(existing);
+  const incomingScore = scoreHeadline(incoming);
+
+  return incomingScore > existingScore ? incoming : existing;
 }
 
 async function fetchNews() {
@@ -92,7 +133,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // ✅ EXISTING STORY → UPDATE
+    // 🔁 EXISTING STORY
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(bestMatch.trending_score, bestMatch.last_seen_at);
       const newScore = Math.min(100, decayed + 8);
@@ -102,7 +143,13 @@ async function fetchNews() {
         updatedSources.push(article.url);
       }
 
-      console.log(`🔥 Updated cluster → ${newScore}`);
+      // 🧠 NEW: choose better headline
+      const betterHeadline = pickBetterHeadline(
+        bestMatch.canonical_title || bestMatch.title,
+        article.title
+      );
+
+      console.log(`🧠 Canonical title: ${betterHeadline}`);
 
       await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${bestMatch.id}`, {
         method: "PATCH",
@@ -115,14 +162,15 @@ async function fetchNews() {
           trending_score: newScore,
           last_seen_at: new Date().toISOString(),
           source_count: updatedSources.length,
-          source_urls: updatedSources
+          source_urls: updatedSources,
+          canonical_title: betterHeadline
         })
       });
 
       continue;
     }
 
-    // 🆕 NEW STORY → OpenAI
+    // 🆕 NEW STORY
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
