@@ -274,4 +274,7 @@ async function fetchNews() {
   console.log("🎉 Done!");
 }
 
-fetchNews();
+fetchNews().catch(err => {
+  console.error("❌ FULL ERROR:", err);
+  process.exit(1);
+});
