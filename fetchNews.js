@@ -38,7 +38,7 @@ function similarity(a, b) {
   return overlap.length / Math.max(A.size, B.size);
 }
 
-// 🔥 Decay
+// 🔥 Apply decay
 function applyDecay(score, lastSeenAt) {
   const hours = (new Date() - new Date(lastSeenAt)) / (1000 * 60 * 60);
   return Math.max(0, Math.round(score - hours * 2));
@@ -79,7 +79,7 @@ function initialScore(category) {
   return map[category] || 10;
 }
 
-// 🤖 NEW: Generate canonical headline (controlled tone)
+// 🤖 AI HEADLINE GENERATOR (UPGRADED PROMPT)
 async function generateHeadline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -93,20 +93,25 @@ async function generateHeadline(title, description) {
         messages: [
           {
             role: "system",
-            content: `Write a concise, factual news headline.
+            content: `Write a concise, punchy news headline.
+
+Rules:
 - 8 to 14 words
-- Clear and direct
-- No exaggeration or sensationalism
-- No clickbait
+- Use strong, active verbs (avoid "is", "are", "was", "were")
+- Lead with the most important fact or action
+- Make it sharp and engaging, but still factual
+- Avoid passive or vague phrasing (e.g. "reports", "says", "witnesses say")
+- Avoid filler words like "amid", "as", "after" where possible
+- No exaggeration, hype, or clickbait
 - No source names
-- Neutral but engaging tone`
+- Should feel modern, tight, and slightly bold — like a premium news app`
           },
           {
             role: "user",
             content: `Title: ${title}\nDescription: ${description}`
           }
         ],
-        temperature: 0.4
+        temperature: 0.5
       })
     });
 
@@ -162,7 +167,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY
+    // 🔁 EXISTING STORY (CLUSTER UPDATE)
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -176,7 +181,7 @@ async function fetchNews() {
         updatedSources.push(article.url);
       }
 
-      // 🤖 Generate improved canonical headline
+      // 🤖 Generate improved headline
       const newHeadline = await generateHeadline(
         article.title,
         article.description
