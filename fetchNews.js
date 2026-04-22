@@ -113,13 +113,20 @@ Rules:
     });
 
     const data = await res.json();
+
+    if (!data.choices || !data.choices[0]) {
+      console.error("⚠️ OpenAI headline error:", data);
+      return cleanHeadline(title);
+    }
+
     return cleanHeadline(data.choices[0].message.content);
-  } catch {
+  } catch (err) {
+    console.error("⚠️ Headline generation failed:", err);
     return cleanHeadline(title);
   }
 }
 
-// 🎬 UPDATED LOGLINE GENERATOR (FIXED)
+// 🎬 LOGLINE GENERATOR (REFINED)
 async function generateLogline(title, description) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -156,8 +163,15 @@ Rules:
     });
 
     const data = await res.json();
+
+    if (!data.choices || !data.choices[0]) {
+      console.error("⚠️ OpenAI logline error:", data);
+      return description || "";
+    }
+
     return data.choices[0].message.content.trim();
-  } catch {
+  } catch (err) {
+    console.error("⚠️ Logline generation failed:", err);
     return description || "";
   }
 }
@@ -206,7 +220,7 @@ async function fetchNews() {
 
     console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-    // 🔁 EXISTING STORY (CLUSTER)
+    // 🔁 CLUSTER MATCH
     if (bestScore >= 0.45 && bestMatch) {
       const decayed = applyDecay(
         bestMatch.trending_score,
@@ -215,7 +229,13 @@ async function fetchNews() {
 
       const newScore = Math.min(100, decayed + 8);
 
-      const updatedSources = bestMatch.source_urls || [];
+      // ✅ FIXED ARRAY HANDLING
+      const updatedSources = Array.isArray(bestMatch.source_urls)
+        ? bestMatch.source_urls
+        : bestMatch.source_urls
+          ? [bestMatch.source_urls]
+          : [];
+
       if (!updatedSources.includes(article.url)) {
         updatedSources.push(article.url);
       }
@@ -274,6 +294,7 @@ async function fetchNews() {
   console.log("🎉 Done!");
 }
 
+// ✅ SAFE ERROR HANDLING
 fetchNews().catch(err => {
   console.error("❌ FULL ERROR:", err);
   process.exit(1);
