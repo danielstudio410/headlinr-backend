@@ -21,7 +21,7 @@ const DECAY_RATE = 0.9;
 
 // ================= HELPERS =================
 
-// ✅ FIXED TOKENIZER
+// ✅ TOKENIZER (fixed)
 function tokenize(text) {
   return text
     .toLowerCase()
@@ -30,7 +30,7 @@ function tokenize(text) {
     .filter((w) => w.length > 2);
 }
 
-// similarity
+// ✅ UPGRADED SIMILARITY (CRITICAL FIX)
 function similarity(a, b) {
   const setA = new Set(tokenize(a));
   const setB = new Set(tokenize(b));
@@ -38,7 +38,9 @@ function similarity(a, b) {
   if (setA.size === 0 || setB.size === 0) return 0;
 
   const intersection = [...setA].filter((x) => setB.has(x));
-  return intersection.length / Math.max(setA.size, setB.size);
+
+  // 🔥 KEY CHANGE: MIN instead of MAX
+  return intersection.length / Math.min(setA.size, setB.size);
 }
 
 // ================= AUTO-TIGHTEN =================
@@ -177,6 +179,7 @@ async function fetchNews() {
       // ================= SIMILARITY =================
       for (const story of existingStories || []) {
         const compareTitle = story.original_title || story.title;
+
         const score = similarity(title, compareTitle);
 
         if (score > bestScore) {
