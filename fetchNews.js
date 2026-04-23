@@ -1,9 +1,6 @@
 import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 // ================= ENV =================
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
@@ -17,33 +14,33 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // ================= CONFIG =================
 const SIMILARITY_THRESHOLD = 0.45;
-const DECAY_RATE = 0.9;
 
 // ================= HELPERS =================
 
-// ✅ TOKENIZER (fixed)
+// --- Improved tokenizer ---
 function tokenize(text) {
   return text
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
-    .split(" ")
+    .split(/\s+/)
     .filter((w) => w.length > 2);
 }
 
-// ✅ UPGRADED SIMILARITY (CRITICAL FIX)
+// --- Improved similarity ---
 function similarity(a, b) {
-  const setA = new Set(tokenize(a));
-  const setB = new Set(tokenize(b));
+  const tokensA = tokenize(a);
+  const tokensB = tokenize(b);
 
-  if (setA.size === 0 || setB.size === 0) return 0;
+  const setA = new Set(tokensA);
+  const setB = new Set(tokensB);
 
-  const intersection = [...setA].filter((x) => setB.has(x));
+  const intersection = [...setA].filter((x) => setB.has(x)).length;
+  const union = new Set([...tokensA, ...tokensB]).size;
 
-  // 🔥 KEY CHANGE: MIN instead of MAX
-  return intersection.length / Math.min(setA.size, setB.size);
+  return union === 0 ? 0 : intersection / union;
 }
 
-// ================= AUTO-TIGHTEN =================
+// ================= ✨ AUTO-TIGHTENING =================
 
 function tightenLogline(text) {
   let t = text;
@@ -59,7 +56,6 @@ function tightenLogline(text) {
     "showcasing",
     "underscoring",
     "bringing attention to",
-    "it is reported that",
   ];
 
   fluff.forEach((phrase) => {
@@ -71,13 +67,12 @@ function tightenLogline(text) {
     "is set to",
     "aims to",
     "seeks to",
-    "moves to",
     "plans to",
     "continues to",
   ];
 
-  weakVerbs.forEach((w) => {
-    t = t.replace(new RegExp(w, "gi"), "");
+  weakVerbs.forEach((phrase) => {
+    t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
   t = t.replace(/\s+/g, " ").trim();
@@ -89,24 +84,25 @@ function tightenLogline(text) {
 
 // ================= AI =================
 
+// --- Logline ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
 
 RULES:
 - Max 22 words
-- One sentence
-- Start with main subject
-- Strong verbs only
-- No fluff
+- One sentence only
+- Start with the subject
+- Use strong verbs
+- No filler or fluff
 - No speculation
-- Grounded but cinematic
+- Grounded but engaging
 
 ARTICLE:
 Title: ${title}
 Description: ${description}
 
-Return only the logline.
+Output only the logline.
 `;
 
   const res = await openai.chat.completions.create({
@@ -117,20 +113,18 @@ Return only the logline.
   return tightenLogline(res.choices[0].message.content.trim());
 }
 
+// --- Headline ---
 async function generateHeadline(title) {
   const prompt = `
-Rewrite this headline to be punchy and engaging.
+Rewrite this headline.
 
 RULES:
 - Max 12 words
-- Slight drama allowed
+- Punchy, clean, slightly dramatic
 - No clickbait
-- Stay factual
+- No new facts
 
-HEADLINE:
 ${title}
-
-Return only headline.
 `;
 
   const res = await openai.chat.completions.create({
@@ -147,28 +141,19 @@ async function fetchNews() {
   try {
     console.log("🚀 Fetching news...");
 
-    // ================= DECAY =================
-    const { error: decayError } = await supabase.rpc("decay_scores", {
-      decay: DECAY_RATE,
-    });
-
-    if (decayError) {
-      console.log("⚠️ Decay skipped (function not found yet)");
-    }
-
-    // ================= FETCH NEWS =================
-    const url = `https://newsapi.org/v2/top-headlines?country=us&pageSize=25&apiKey=${NEWS_API_KEY}`;
+    const url = `https://newsapi.org/v2/top-headlines?country=us&pageSize=20&apiKey=${NEWS_API_KEY}`;
     const res = await fetch(url);
     const data = await res.json();
+
     const articles = data.articles;
 
-    // ================= LOAD EXISTING =================
     const { data: existingStories } = await supabase
       .from("articles")
       .select("*");
 
     for (const article of articles) {
       const { title, description, url } = article;
+
       if (!title || !url) continue;
 
       console.log(`📰 ${title}`);
@@ -176,9 +161,16 @@ async function fetchNews() {
       let bestMatch = null;
       let bestScore = 0;
 
-      // ================= SIMILARITY =================
       for (const story of existingStories || []) {
         const compareTitle = story.original_title || story.title;
+
+        // 🚨 SELF-MATCH FIX
+        if (
+          compareTitle &&
+          compareTitle.trim().toLowerCase() === title.trim().toLowerCase()
+        ) {
+          continue;
+        }
 
         const score = similarity(title, compareTitle);
 
@@ -192,13 +184,13 @@ async function fetchNews() {
 
       // ================= CLUSTER =================
       if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
-        const newScore = bestMatch.trending_score + 5;
+        const newScore = (bestMatch.trending_score || 0) + 5;
 
         await supabase
           .from("articles")
           .update({
             trending_score: newScore,
-            last_seen_at: new Date(),
+            last_seen_at: new Date().toISOString(),
           })
           .eq("id", bestMatch.id);
 
@@ -221,7 +213,7 @@ async function fetchNews() {
         logline: logline,
         url: url,
         trending_score: 10,
-        last_seen_at: new Date(),
+        last_seen_at: new Date().toISOString(),
       });
 
       console.log("✅ New canonical story created");
