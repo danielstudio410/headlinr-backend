@@ -38,13 +38,13 @@ function similarity(a, b) {
   return union === 0 ? 0 : intersection / union;
 }
 
-// ================= DECAY FUNCTION =================
+// ================= DECAY =================
 function applyDecay(score, hoursSinceSeen) {
-  const decayRate = 0.08; // tweakable
+  const decayRate = 0.06; // smoother decay (was 0.08)
   return score * Math.exp(-decayRate * hoursSinceSeen);
 }
 
-// ================= TRENDING SCORE =================
+// ================= SCORE =================
 function calculateScore(story) {
   const now = new Date();
   const lastSeen = new Date(story.last_seen_at);
@@ -56,14 +56,32 @@ function calculateScore(story) {
   // --- DECAY ---
   const decayed = applyDecay(story.trending_score || 10, hoursSinceSeen);
 
-  // --- VELOCITY ---
+  // --- VELOCITY (tuned down) ---
   const velocity = (story.source_count || 1) / Math.max(hoursSinceFirst, 1);
 
   // --- RECENCY BOOST ---
-  const recencyBoost = hoursSinceSeen < 6 ? 1.5 : 1;
+  const recencyBoost = hoursSinceSeen < 4 ? 1.4 : 1;
 
-  // --- FINAL SCORE ---
-  return decayed + velocity * 5 * recencyBoost;
+  // --- FINAL ---
+  return decayed + velocity * 3 * recencyBoost;
+}
+
+// ================= DECAY EXECUTION =================
+async function runDecay(existingStories) {
+  console.log("⏳ Running decay pass...");
+
+  for (const story of existingStories || []) {
+    const updatedScore = calculateScore(story);
+
+    await supabase
+      .from("articles")
+      .update({
+        trending_score: updatedScore,
+      })
+      .eq("id", story.id);
+  }
+
+  console.log("✅ Decay applied");
 }
 
 // ================= AUTO-TIGHTEN =================
@@ -94,9 +112,9 @@ Write a tight cinematic news logline.
 
 - Max 22 words
 - One sentence
-- No fluff
 - Strong verbs
-- Fact-based
+- Slightly dramatic but factual
+- No fluff
 
 Title: ${title}
 Description: ${description}
@@ -139,6 +157,9 @@ async function fetchNews() {
     const data = await res.json();
 
     const { data: existing } = await supabase.from("articles").select("*");
+
+    // 🔥 RUN DECAY FIRST
+    await runDecay(existing);
 
     for (const article of data.articles) {
       const { title, description, url } = article;
