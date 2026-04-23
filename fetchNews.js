@@ -21,23 +21,23 @@ const DECAY_RATE = 0.9;
 
 // ================= HELPERS =================
 
-// ✅ FIXED TOKENIZER (CRITICAL)
+// ✅ FIXED TOKENIZER
 function tokenize(text) {
   return text
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(" ")
-    .filter((w) => w.length > 2); // FIXED (was >3)
+    .filter((w) => w.length > 2);
 }
 
 // similarity
 function similarity(a, b) {
   const setA = new Set(tokenize(a));
   const setB = new Set(tokenize(b));
-  const intersection = [...setA].filter((x) => setB.has(x));
 
   if (setA.size === 0 || setB.size === 0) return 0;
 
+  const intersection = [...setA].filter((x) => setB.has(x));
   return intersection.length / Math.max(setA.size, setB.size);
 }
 
@@ -145,15 +145,22 @@ async function fetchNews() {
   try {
     console.log("🚀 Fetching news...");
 
-    // --- DECAY ALL STORIES ---
-    await supabase.rpc("decay_scores", { decay: DECAY_RATE }).catch(() => {});
+    // ================= DECAY =================
+    const { error: decayError } = await supabase.rpc("decay_scores", {
+      decay: DECAY_RATE,
+    });
 
+    if (decayError) {
+      console.log("⚠️ Decay skipped (function not found yet)");
+    }
+
+    // ================= FETCH NEWS =================
     const url = `https://newsapi.org/v2/top-headlines?country=us&pageSize=25&apiKey=${NEWS_API_KEY}`;
     const res = await fetch(url);
     const data = await res.json();
-
     const articles = data.articles;
 
+    // ================= LOAD EXISTING =================
     const { data: existingStories } = await supabase
       .from("articles")
       .select("*");
@@ -167,9 +174,9 @@ async function fetchNews() {
       let bestMatch = null;
       let bestScore = 0;
 
+      // ================= SIMILARITY =================
       for (const story of existingStories || []) {
         const compareTitle = story.original_title || story.title;
-
         const score = similarity(title, compareTitle);
 
         if (score > bestScore) {
@@ -207,7 +214,7 @@ async function fetchNews() {
 
       await supabase.from("articles").insert({
         title: headline,
-        original_title: title, // ✅ FIXED
+        original_title: title,
         logline: logline,
         url: url,
         trending_score: 10,
