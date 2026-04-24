@@ -13,7 +13,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // ================= CONFIG =================
-const SIMILARITY_THRESHOLD = 0.30;
+const SIMILARITY_THRESHOLD = 0.5;
 
 // ================= TOKENIZER =================
 function tokenize(text) {
@@ -21,103 +21,89 @@ function tokenize(text) {
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(/\s+/)
-    .filter((w) => w.length > 2);
+    .filter((w) => w.length > 3);
 }
 
 // ================= SIMILARITY =================
 function similarity(a, b) {
-  const tokensA = tokenize(a);
-  const tokensB = tokenize(b);
+  const setA = new Set(tokenize(a));
+  const setB = new Set(tokenize(b));
 
-  const setA = new Set(tokensA);
-  const setB = new Set(tokensB);
+  const intersection = [...setA].filter((x) => setB.has(x));
 
-  const intersection = [...setA].filter((x) => setB.has(x)).length;
-  const union = new Set([...tokensA, ...tokensB]).size;
-
-  return union === 0 ? 0 : intersection / union;
+  return intersection.length / Math.max(setA.size, setB.size);
 }
 
-// ================= DECAY =================
-function applyDecay(score, hoursSinceSeen) {
-  const decayRate = 0.06; // smoother decay (was 0.08)
-  return score * Math.exp(-decayRate * hoursSinceSeen);
-}
-
-// ================= SCORE =================
-function calculateScore(story) {
-  const now = new Date();
-  const lastSeen = new Date(story.last_seen_at);
-  const firstSeen = new Date(story.first_seen_at || story.last_seen_at);
-
-  const hoursSinceSeen = (now - lastSeen) / (1000 * 60 * 60);
-  const hoursSinceFirst = (now - firstSeen) / (1000 * 60 * 60);
-
-  // --- DECAY ---
-  const decayed = applyDecay(story.trending_score || 10, hoursSinceSeen);
-
-  // --- VELOCITY (tuned down) ---
-  const velocity = (story.source_count || 1) / Math.max(hoursSinceFirst, 1);
-
-  // --- RECENCY BOOST ---
-  const recencyBoost = hoursSinceSeen < 4 ? 1.4 : 1;
-
-  // --- FINAL ---
-  return decayed + velocity * 3 * recencyBoost;
-}
-
-// ================= DECAY EXECUTION =================
-async function runDecay(existingStories) {
-  console.log("⏳ Running decay pass...");
-
-  for (const story of existingStories || []) {
-    const updatedScore = calculateScore(story);
-
-    await supabase
-      .from("articles")
-      .update({
-        trending_score: updatedScore,
-      })
-      .eq("id", story.id);
-  }
-
-  console.log("✅ Decay applied");
-}
-
-// ================= AUTO-TIGHTEN =================
+// ================= ✨ AUTO-TIGHTEN =================
 function tightenLogline(text) {
   let t = text;
 
+  // Remove cinematic clichés
+  const bannedPhrases = [
+    "in a world",
+    "must choose",
+    "battle of",
+    "haunted by",
+    "on the brink",
+    "teetering",
+    "shadows of",
+    "ultimate question",
+  ];
+
+  bannedPhrases.forEach((phrase) => {
+    const regex = new RegExp(phrase, "gi");
+    t = t.replace(regex, "");
+  });
+
+  // Remove fluff
   const fluff = [
     "in a dramatic turn",
     "in a surprising twist",
     "in a shocking development",
-    "in a stunning move",
+    "amid growing concerns",
+    "raising questions about",
   ];
 
-  fluff.forEach((f) => {
-    t = t.replace(new RegExp(f, "gi"), "");
+  fluff.forEach((phrase) => {
+    const regex = new RegExp(phrase, "gi");
+    t = t.replace(regex, "");
   });
 
+  // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
 
   if (!t.endsWith(".")) t += ".";
+
   return t;
 }
 
 // ================= AI =================
+
+// --- LOGLINE (UPDATED) ---
 async function generateLogline(title, description) {
   const prompt = `
-Write a tight cinematic news logline.
+Write a tight, cinematic news logline.
 
+STYLE:
+- Feels like a prestige documentary or Netflix limited series
+- Grounded, realistic, and factual
+- Engaging, but never fictional or exaggerated
+
+RULES:
 - Max 22 words
-- One sentence
-- Strong verbs
-- Slightly dramatic but factual
-- No fluff
+- One sentence only
+- Start with the real subject
+- Use strong verbs
+- ONLY include facts from the article
+- No invented characters or motives
+- No "in a world", "must choose", or trailer language
+- No speculation
 
+ARTICLE:
 Title: ${title}
 Description: ${description}
+
+Return ONLY the logline.
 `;
 
   const res = await openai.chat.completions.create({
@@ -125,18 +111,24 @@ Description: ${description}
     messages: [{ role: "user", content: prompt }],
   });
 
-  return tightenLogline(res.choices[0].message.content.trim());
+  const raw = res.choices[0].message.content.trim();
+  return tightenLogline(raw);
 }
 
+// --- HEADLINE ---
 async function generateHeadline(title) {
   const prompt = `
-Rewrite this headline:
+Rewrite this news headline to be punchy and engaging.
 
+RULES:
 - Max 12 words
-- Punchy, clean, slightly dramatic
-- No clickbait
+- Slightly dramatic but factual
+- No exaggeration
 
+HEADLINE:
 ${title}
+
+Return only the headline.
 `;
 
   const res = await openai.chat.completions.create({
@@ -147,38 +139,58 @@ ${title}
   return res.choices[0].message.content.trim();
 }
 
+// ================= DECAY =================
+async function applyDecay() {
+  console.log("⏳ Running decay pass...");
+
+  const { data: stories } = await supabase.from("articles").select("*");
+
+  for (const story of stories || []) {
+    const hoursOld =
+      (Date.now() - new Date(story.last_seen_at).getTime()) / 3600000;
+
+    const decayFactor = Math.exp(-hoursOld / 24);
+    const newScore = Math.max(1, story.trending_score * decayFactor);
+
+    await supabase
+      .from("articles")
+      .update({ trending_score: newScore })
+      .eq("id", story.id);
+  }
+
+  console.log("✅ Decay applied");
+}
+
 // ================= MAIN =================
 async function fetchNews() {
   try {
     console.log("🚀 Fetching news...");
 
+    await applyDecay();
+
     const url = `https://newsapi.org/v2/top-headlines?country=us&pageSize=20&apiKey=${NEWS_API_KEY}`;
     const res = await fetch(url);
     const data = await res.json();
 
-    const { data: existing } = await supabase.from("articles").select("*");
-
-    // 🔥 RUN DECAY FIRST
-    await runDecay(existing);
-
     for (const article of data.articles) {
       const { title, description, url } = article;
-      if (!title || !url) continue;
+      if (!title) continue;
 
       console.log(`📰 ${title}`);
+
+      const { data: existing } = await supabase
+        .from("articles")
+        .select("*");
 
       let bestMatch = null;
       let bestScore = 0;
 
       for (const story of existing || []) {
-        const compareTitle = story.original_title || story.title;
+        if (!story.original_title) continue;
 
-        // 🚨 SELF-MATCH FIX
-        if (compareTitle?.toLowerCase() === title.toLowerCase()) continue;
+        const score = similarity(title, story.original_title);
 
-        const score = similarity(title, compareTitle);
-
-        if (score > bestScore) {
+        if (score > bestScore && score < 0.98) {
           bestScore = score;
           bestMatch = story;
         }
@@ -186,32 +198,23 @@ async function fetchNews() {
 
       console.log(`🔍 Similarity: ${bestScore.toFixed(2)}`);
 
-      // ================= CLUSTER =================
       if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
-        const updatedSourceCount = (bestMatch.source_count || 1) + 1;
-
-        const updatedScore = calculateScore({
-          ...bestMatch,
-          source_count: updatedSourceCount,
-        });
+        const newScore = bestMatch.trending_score + 5;
 
         await supabase
           .from("articles")
           .update({
-            trending_score: updatedScore,
-            source_count: updatedSourceCount,
-            last_seen_at: new Date().toISOString(),
+            trending_score: newScore,
+            last_seen_at: new Date(),
           })
           .eq("id", bestMatch.id);
 
         console.log(
-          `🔥 Clustered → sources: ${updatedSourceCount}, score: ${updatedScore.toFixed(2)}`
+          `🔥 Clustered → sources: +1, score: ${newScore.toFixed(2)}`
         );
-
         continue;
       }
 
-      // ================= NEW STORY =================
       const logline = await generateLogline(title, description);
       const headline = await generateHeadline(title);
 
@@ -223,9 +226,7 @@ async function fetchNews() {
         logline,
         url,
         trending_score: 10,
-        source_count: 1,
-        first_seen_at: new Date().toISOString(),
-        last_seen_at: new Date().toISOString(),
+        last_seen_at: new Date(),
       });
 
       console.log("✅ New canonical story created");
