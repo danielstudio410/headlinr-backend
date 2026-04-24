@@ -28,9 +28,7 @@ function tokenize(text) {
 function similarity(a, b) {
   const setA = new Set(tokenize(a));
   const setB = new Set(tokenize(b));
-
   const intersection = [...setA].filter((x) => setB.has(x));
-
   return intersection.length / Math.max(setA.size, setB.size);
 }
 
@@ -55,7 +53,7 @@ function tightenLogline(text) {
     t = t.replace(regex, "");
   });
 
-  // Remove fluff
+  // Remove fluff phrases
   const fluff = [
     "in a dramatic turn",
     "in a surprising twist",
@@ -69,6 +67,21 @@ function tightenLogline(text) {
     t = t.replace(regex, "");
   });
 
+  // Remove soft editorial phrasing (NEW UPGRADE)
+  const softPhrases = [
+    "highlighting",
+    "raising",
+    "igniting",
+    "amid",
+    "prompting",
+    "signaling",
+  ];
+
+  softPhrases.forEach((phrase) => {
+    const regex = new RegExp(`\\b${phrase}\\b.*`, "gi");
+    t = t.replace(regex, "");
+  });
+
   // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
 
@@ -79,25 +92,29 @@ function tightenLogline(text) {
 
 // ================= AI =================
 
-// --- LOGLINE (UPDATED) ---
+// --- FINAL LOGLINE PROMPT (UPGRADED) ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
 
 STYLE:
-- Feels like a prestige documentary or Netflix limited series
-- Grounded, realistic, and factual
-- Engaging, but never fictional or exaggerated
+- Feels like a premium documentary or breaking news alert
+- Grounded, factual, and credible
+- Engaging through clarity, not drama
 
 RULES:
-- Max 22 words
+- Max 20 words
 - One sentence only
-- Start with the real subject
-- Use strong verbs
-- ONLY include facts from the article
-- No invented characters or motives
-- No "in a world", "must choose", or trailer language
-- No speculation
+- Start with the main subject
+- Use precise, strong verbs
+- ONLY include verifiable facts from the article
+- Do NOT add interpretation, speculation, or narrative framing
+- No invented motives, emotions, or stakes
+- No phrases like "amid", "highlighting", "igniting", "raising concerns"
+
+TONE:
+- Cinematic = clarity + consequence
+- Prefer sharp, factual endings over dramatic ones
 
 ARTICLE:
 Title: ${title}
@@ -115,7 +132,7 @@ Return ONLY the logline.
   return tightenLogline(raw);
 }
 
-// --- HEADLINE ---
+// --- HEADLINE (UNCHANGED) ---
 async function generateHeadline(title) {
   const prompt = `
 Rewrite this news headline to be punchy and engaging.
@@ -190,6 +207,7 @@ async function fetchNews() {
 
         const score = similarity(title, story.original_title);
 
+        // prevent self-match bug
         if (score > bestScore && score < 0.98) {
           bestScore = score;
           bestMatch = story;
