@@ -65,18 +65,18 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
-  // Remove soft editorial phrasing
-  const softPhrases = [
-    "highlighting",
-    "raising",
-    "igniting",
-    "amid",
-    "prompting",
-    "signaling",
+  // Remove overly dramatic words
+  const bannedWords = [
+    "frenzy",
+    "outrage",
+    "electrifying",
+    "surge",
+    "critical",
+    "dramatic",
   ];
 
-  softPhrases.forEach((phrase) => {
-    t = t.replace(new RegExp(`\\b${phrase}\\b.*`, "gi"), "");
+  bannedWords.forEach((word) => {
+    t = t.replace(new RegExp(`\\b${word}\\b`, "gi"), "");
   });
 
   // Replace weak verbs
@@ -91,51 +91,59 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(weak, "gi"), strong);
   });
 
-  // Remove overly formal wording (NEW micro-upgrade)
-  const formalPhrases = ["initiate", "implement", "utilize"];
+  // Remove overly formal words
+  const formalWords = ["initiate", "implement", "utilize"];
 
-  formalPhrases.forEach((word) => {
+  formalWords.forEach((word) => {
     t = t.replace(new RegExp(`\\b${word}\\b`, "gi"), "");
   });
 
   // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
 
-  // Validation
-  if (t.split(" ").length < 6) return null;
+  // ================= VALIDATION =================
 
-  if (!t.endsWith(".")) t += ".";
+  if (!t || t.length < 30) return null;
+
+  if (t.includes(",.") || t.includes('".') || t.includes(",,")) return null;
+
+  if (!t.endsWith(".")) return null;
+
+  if (t.split(" ").length < 7) return null;
 
   return t;
 }
 
 // ================= AI =================
 
-// --- FINAL LOGLINE ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
 
 STYLE:
-- Feels like a premium news alert with cinematic edge
-- Grounded, factual, and credible
-- Engaging through momentum and clarity
+- Feels like a premium news alert with energy and momentum
+- Clear, factual, and grounded
+- Engaging through strong phrasing and forward movement
 
 RULES:
 - Max 20 words
 - One sentence only
 - Start with the main subject
 - Use strong, active verbs
-- Emphasise the most impactful outcome or consequence
-- ONLY include verifiable facts
-- No speculation or invented context
+- Emphasise the key event or outcome
+- ONLY include verifiable facts from the article
+- Do NOT add interpretation, speculation, or invented context
 - Do not misidentify who was harmed, charged, or affected
-- Avoid bureaucratic or overly formal phrasing
+
+STRICTLY AVOID:
+- Exaggeration or emotional language
+- Words like "frenzy", "outrage", "electrifying", "surge", "dramatic"
+- Any invented consequences or implications
 
 TONE:
-- Cinematic = urgency + consequence
-- Not dramatic, not flat
-- Punchy and readable
+- Cinematic = clarity + momentum
+- Energetic but controlled
+- Punchy, not theatrical
 
 ARTICLE:
 Title: ${title}
@@ -156,7 +164,7 @@ Return ONLY the logline.
     if (cleaned) return cleaned;
   }
 
-  return title; // fallback
+  return title; // safe fallback
 }
 
 // --- HEADLINE ---
