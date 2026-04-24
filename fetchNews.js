@@ -53,7 +53,7 @@ function tightenLogline(text) {
     t = t.replace(regex, "");
   });
 
-  // Remove fluff phrases
+  // Remove fluff
   const fluff = [
     "in a dramatic turn",
     "in a surprising twist",
@@ -67,7 +67,7 @@ function tightenLogline(text) {
     t = t.replace(regex, "");
   });
 
-  // Remove soft editorial phrasing (NEW UPGRADE)
+  // Remove soft editorial phrasing
   const softPhrases = [
     "highlighting",
     "raising",
@@ -82,6 +82,19 @@ function tightenLogline(text) {
     t = t.replace(regex, "");
   });
 
+  // Replace weak verbs (FINAL ADD-ON)
+  const weakVerbs = [
+    ["approaches", "nears"],
+    ["aims to", ""],
+    ["seeks to", ""],
+    ["addresses", ""],
+  ];
+
+  weakVerbs.forEach(([weak, strong]) => {
+    const regex = new RegExp(weak, "gi");
+    t = t.replace(regex, strong);
+  });
+
   // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
 
@@ -92,29 +105,28 @@ function tightenLogline(text) {
 
 // ================= AI =================
 
-// --- FINAL LOGLINE PROMPT (UPGRADED) ---
+// --- FINAL LOGLINE PROMPT ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
 
 STYLE:
-- Feels like a premium documentary or breaking news alert
-- Grounded, factual, and credible
-- Engaging through clarity, not drama
+- Feels like a premium news alert or documentary logline
+- Clear, factual, and grounded
+- Engaging through precision, not drama
 
 RULES:
 - Max 20 words
 - One sentence only
 - Start with the main subject
-- Use precise, strong verbs
+- Use strong, specific verbs (avoid vague verbs like "approaches", "aims", "addresses")
 - ONLY include verifiable facts from the article
-- Do NOT add interpretation, speculation, or narrative framing
-- No invented motives, emotions, or stakes
-- No phrases like "amid", "highlighting", "igniting", "raising concerns"
+- No interpretation, speculation, or added context
+- No filler phrases or bureaucratic language
 
 TONE:
 - Cinematic = clarity + consequence
-- Prefer sharp, factual endings over dramatic ones
+- Prefer simple, direct wording over complex phrasing
 
 ARTICLE:
 Title: ${title}
@@ -132,7 +144,7 @@ Return ONLY the logline.
   return tightenLogline(raw);
 }
 
-// --- HEADLINE (UNCHANGED) ---
+// --- HEADLINE ---
 async function generateHeadline(title) {
   const prompt = `
 Rewrite this news headline to be punchy and engaging.
@@ -207,7 +219,7 @@ async function fetchNews() {
 
         const score = similarity(title, story.original_title);
 
-        // prevent self-match bug
+        // prevent self-match
         if (score > bestScore && score < 0.98) {
           bestScore = score;
           bestMatch = story;
