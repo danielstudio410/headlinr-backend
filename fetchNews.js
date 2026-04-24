@@ -36,6 +36,7 @@ function similarity(a, b) {
 function tightenLogline(text) {
   let t = text;
 
+  // Remove cinematic clichés
   const bannedPhrases = [
     "in a world",
     "must choose",
@@ -51,6 +52,7 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
+  // Remove fluff
   const fluff = [
     "in a dramatic turn",
     "in a surprising twist",
@@ -63,6 +65,7 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
+  // Remove soft editorial phrasing
   const softPhrases = [
     "highlighting",
     "raising",
@@ -76,6 +79,7 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(`\\b${phrase}\\b.*`, "gi"), "");
   });
 
+  // Replace weak verbs
   const weakVerbs = [
     ["approaches", "nears"],
     ["aims to", ""],
@@ -87,9 +91,17 @@ function tightenLogline(text) {
     t = t.replace(new RegExp(weak, "gi"), strong);
   });
 
+  // Remove overly formal wording (NEW micro-upgrade)
+  const formalPhrases = ["initiate", "implement", "utilize"];
+
+  formalPhrases.forEach((word) => {
+    t = t.replace(new RegExp(`\\b${word}\\b`, "gi"), "");
+  });
+
+  // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
 
-  // ❗ VALIDATION LAYER
+  // Validation
   if (t.split(" ").length < 6) return null;
 
   if (!t.endsWith(".")) t += ".";
@@ -99,29 +111,31 @@ function tightenLogline(text) {
 
 // ================= AI =================
 
-// --- FINAL LOGLINE GENERATION ---
+// --- FINAL LOGLINE ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
 
 STYLE:
-- Feels like a premium news alert or documentary logline
-- Clear, factual, and grounded
-- Engaging through precision, not drama
+- Feels like a premium news alert with cinematic edge
+- Grounded, factual, and credible
+- Engaging through momentum and clarity
 
 RULES:
 - Max 20 words
 - One sentence only
 - Start with the main subject
-- Use strong, specific verbs
-- ONLY include verifiable facts from the article
-- Do NOT add interpretation or speculation
-- No filler or bureaucratic phrasing
+- Use strong, active verbs
+- Emphasise the most impactful outcome or consequence
+- ONLY include verifiable facts
+- No speculation or invented context
 - Do not misidentify who was harmed, charged, or affected
+- Avoid bureaucratic or overly formal phrasing
 
 TONE:
-- Cinematic = clarity + consequence
-- Prefer simple, direct wording
+- Cinematic = urgency + consequence
+- Not dramatic, not flat
+- Punchy and readable
 
 ARTICLE:
 Title: ${title}
@@ -142,8 +156,7 @@ Return ONLY the logline.
     if (cleaned) return cleaned;
   }
 
-  // fallback (safe)
-  return title;
+  return title; // fallback
 }
 
 // --- HEADLINE ---
