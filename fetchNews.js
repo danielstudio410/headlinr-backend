@@ -36,7 +36,6 @@ function similarity(a, b) {
 function tightenLogline(text) {
   let t = text;
 
-  // Remove cinematic clichés
   const bannedPhrases = [
     "in a world",
     "must choose",
@@ -49,11 +48,9 @@ function tightenLogline(text) {
   ];
 
   bannedPhrases.forEach((phrase) => {
-    const regex = new RegExp(phrase, "gi");
-    t = t.replace(regex, "");
+    t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
-  // Remove fluff
   const fluff = [
     "in a dramatic turn",
     "in a surprising twist",
@@ -63,11 +60,9 @@ function tightenLogline(text) {
   ];
 
   fluff.forEach((phrase) => {
-    const regex = new RegExp(phrase, "gi");
-    t = t.replace(regex, "");
+    t = t.replace(new RegExp(phrase, "gi"), "");
   });
 
-  // Remove soft editorial phrasing
   const softPhrases = [
     "highlighting",
     "raising",
@@ -78,11 +73,9 @@ function tightenLogline(text) {
   ];
 
   softPhrases.forEach((phrase) => {
-    const regex = new RegExp(`\\b${phrase}\\b.*`, "gi");
-    t = t.replace(regex, "");
+    t = t.replace(new RegExp(`\\b${phrase}\\b.*`, "gi"), "");
   });
 
-  // Replace weak verbs (FINAL ADD-ON)
   const weakVerbs = [
     ["approaches", "nears"],
     ["aims to", ""],
@@ -91,12 +84,13 @@ function tightenLogline(text) {
   ];
 
   weakVerbs.forEach(([weak, strong]) => {
-    const regex = new RegExp(weak, "gi");
-    t = t.replace(regex, strong);
+    t = t.replace(new RegExp(weak, "gi"), strong);
   });
 
-  // Clean spacing
   t = t.replace(/\s+/g, " ").trim();
+
+  // ❗ VALIDATION LAYER
+  if (t.split(" ").length < 6) return null;
 
   if (!t.endsWith(".")) t += ".";
 
@@ -105,7 +99,7 @@ function tightenLogline(text) {
 
 // ================= AI =================
 
-// --- FINAL LOGLINE PROMPT ---
+// --- FINAL LOGLINE GENERATION ---
 async function generateLogline(title, description) {
   const prompt = `
 Write a tight, cinematic news logline.
@@ -119,14 +113,15 @@ RULES:
 - Max 20 words
 - One sentence only
 - Start with the main subject
-- Use strong, specific verbs (avoid vague verbs like "approaches", "aims", "addresses")
+- Use strong, specific verbs
 - ONLY include verifiable facts from the article
-- No interpretation, speculation, or added context
-- No filler phrases or bureaucratic language
+- Do NOT add interpretation or speculation
+- No filler or bureaucratic phrasing
+- Do not misidentify who was harmed, charged, or affected
 
 TONE:
 - Cinematic = clarity + consequence
-- Prefer simple, direct wording over complex phrasing
+- Prefer simple, direct wording
 
 ARTICLE:
 Title: ${title}
@@ -135,13 +130,20 @@ Description: ${description}
 Return ONLY the logline.
 `;
 
-  const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-  });
+  for (let i = 0; i < 2; i++) {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+    });
 
-  const raw = res.choices[0].message.content.trim();
-  return tightenLogline(raw);
+    const raw = res.choices[0].message.content.trim();
+    const cleaned = tightenLogline(raw);
+
+    if (cleaned) return cleaned;
+  }
+
+  // fallback (safe)
+  return title;
 }
 
 // --- HEADLINE ---
@@ -219,7 +221,6 @@ async function fetchNews() {
 
         const score = similarity(title, story.original_title);
 
-        // prevent self-match
         if (score > bestScore && score < 0.98) {
           bestScore = score;
           bestMatch = story;
